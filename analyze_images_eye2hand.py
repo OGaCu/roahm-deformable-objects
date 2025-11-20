@@ -108,6 +108,15 @@ print("R", R)
 print("t", t)
 print("end")
 
+'''
+R [[-0.1012 -0.2500 -0.9629]
+ [0.9751 -0.2171 -0.0461]
+ [-0.1975 -0.9436 0.2658]]
+t [[3.7631]
+ [-0.4301]
+ [-0.1390]]
+ '''
+
 # R, t = cv2.calibrateHandEye(
 #         R_gripper2base=r_base2gripper,
 #         t_gripper2base=t_base2gripper,
