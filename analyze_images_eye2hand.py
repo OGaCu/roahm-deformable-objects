@@ -1,12 +1,13 @@
-from apriltag_image import apriltag_image
+from AprilTag.scripts.apriltag_image import apriltag_image
 import cv2
 import numpy as np
 
 detection_transforms = []
 for i in range(1, 9):
-    detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=False)
+# for i in range(5, 6):
+    detections = apriltag_image([f"image_pose_{i}.png"], output_images=False, display_images=False)  
     detection_transforms.append(detections[1])
-print(detection_transforms)
+# print(detection_transforms)
 t_cam2gripper = []
 r_cam2gripper = []
 
@@ -67,12 +68,84 @@ for R, t in zip(r_cam2gripper, t_cam2gripper):
     r_gripper2cam.append(R_b2g)
     t_gripper2cam.append(t_b2g)
 
+gripper2tag = np.array([[0, 1, 0, 0],
+                        [1, 0, 0, 0.062], 
+                        [0, 0, -1, 0.0175], 
+                        [0, 0, 0, 1]])
+# gripper2tag = np.array([[0, 1, 0, 0],
+#                         [1, 0, 0, 0], 
+#                         [0, 0, -1, 0], 
+#                         [0, 0, 0, 1]])
+
+
+r_base2tag, t_base2tag = [], []
+for r, t in zip(r_base2gripper, t_base2gripper):
+    T_base2gripper = np.eye(4)
+    T_base2gripper[0:3, 0:3] = r
+    T_base2gripper[0:3, 3] = t
+
+
+    T_gripper2tag = T_base2gripper @ gripper2tag
+    print(T_gripper2tag)
+    r_base2tag.append(T_gripper2tag[0:3, 0:3])
+    t_base2tag.append(T_gripper2tag[0:3, 3])
+
+r_tag2base, t_tag2base = [], []
+for R, t in zip(r_base2tag, t_base2tag):
+    R_b2g = R.T
+    t_b2g = -R_b2g @ t
+    r_tag2base.append(R_b2g)
+    t_tag2base.append(t_b2g)
+
+
 R, t = cv2.calibrateHandEye(
-        R_gripper2base=r_base2gripper,
-        t_gripper2base=t_base2gripper,
-        R_target2cam=r_gripper2cam,
-        t_target2cam=t_gripper2cam,
-    )
-print("done eye2hand calibration")
+        R_gripper2base=r_tag2base,
+        t_gripper2base=t_tag2base,
+        R_target2cam=r_cam2gripper, # cam to tag
+        t_target2cam=t_cam2gripper)
+print("new eye to hand calibration")
 print("R", R)
 print("t", t)
+print("end")
+
+# R, t = cv2.calibrateHandEye(
+#         R_gripper2base=r_base2gripper,
+#         t_gripper2base=t_base2gripper,
+#         R_target2cam=r_gripper2cam,
+#         t_target2cam=t_gripper2cam,
+#     )
+# print("done eye2hand calibration") 
+# print("R", R)
+# print("t", t)
+
+# '''
+# R [[-0.5915 -0.3398 0.7312]
+#  [-0.5464 0.8358 -0.0536]
+#  [-0.5929 -0.4312 -0.6801]]
+# t [[-0.3991] 
+#  [0.1336]
+#  [0.0660]]
+# '''
+
+
+
+# R_cam2base, t_cam2base = cv2.calibrateHandEye(
+#         R_gripper2base=r_gripper2cam,
+#         t_gripper2base=t_gripper2cam,
+#         R_target2cam=r_base2gripper,
+#         t_target2cam=t_base2gripper,
+# )
+
+# print("camera to base:")
+# print("R_cam2base", R_cam2base)
+# print("t_cam2base", t_cam2base)
+
+# '''
+# camera to base:
+# R_cam2base [[-0.1012 0.9751 -0.1975]
+#  [-0.2500 -0.2171 -0.9436]
+#  [-0.9629 -0.0461 0.2658]]
+# t_cam2base [[0.8349]
+#  [0.7083]
+#  [3.7261]]
+#  '''
