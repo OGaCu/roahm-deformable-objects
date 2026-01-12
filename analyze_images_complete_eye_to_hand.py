@@ -9,14 +9,14 @@ for i in range(1, max_images+1):
     detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
     detection_transforms.append(detections[1])
 print(detection_transforms)
-t_cam2gripper = []
-r_cam2gripper = []
+t_tag_in_cam_frame = []
+r_tag_in_cam_frame = []
 
 for detection in detection_transforms:
-    t_cam2gripper.append(detection[0:3, 3])
-    r_cam2gripper.append(detection[0:3, 0:3])
-print(t_cam2gripper)
-print(r_cam2gripper)
+    t_tag_in_cam_frame.append(detection[0:3, 3])
+    r_tag_in_cam_frame.append(detection[0:3, 0:3])
+print(t_tag_in_cam_frame)
+print(r_tag_in_cam_frame)
 
 ### Base 2 Gripper transforms
 # achieved_pos1 = np.array([0.56, -0.21, 0.44])
@@ -72,19 +72,22 @@ print(orientations)
 # t_base2gripper = [achieved_pos1, achieved_pos2, achieved_pos3, achieved_pos4, achieved_pos5, achieved_pos6, achieved_pos7, achieved_pos8]
 # r_base2gripper = [achieved_ori1, achieved_ori2, achieved_ori3, achieved_ori4, achieved_ori5, achieved_ori6, achieved_ori7, achieved_ori8]
 
-t_base2gripper = positions
-r_base2gripper = orientations
+t_base2gripper = positions[0:max_images]
+r_base2gripper = orientations[0:max_images]
+
+# print("t_base2gripper:\n", t_base2gripper)
+# print("r_base2gripper:\n", r_base2gripper)
 
 r_gripper2cam, t_gripper2cam = [], []
-for R, t in zip(r_cam2gripper, t_cam2gripper):
+for R, t in zip(r_tag_in_cam_frame, t_tag_in_cam_frame):
     R_b2g = R.T
     t_b2g = -R_b2g @ t
     r_gripper2cam.append(R_b2g)
     t_gripper2cam.append(t_b2g)
 
-gripper2tag = np.array([[0, 1, 0, 0],
+gripper2tag = np.array([[0, 0, -1, 0.0175],
+                        [0, 1, 0, 0], 
                         [1, 0, 0, 0.062], 
-                        [0, 0, -1, 0.0175], 
                         [0, 0, 0, 1]])
 # gripper2tag = np.array([[0, 1, 0, 0],
 #                         [1, 0, 0, 0], 
@@ -92,6 +95,7 @@ gripper2tag = np.array([[0, 1, 0, 0],
 #                         [0, 0, 0, 1]])
 
 
+# r_base2tag, t_base2tag = r_base2gripper, t_base2gripper
 r_base2tag, t_base2tag = [], []
 for r, t in zip(r_base2gripper, t_base2gripper):
     T_base2gripper = np.eye(4)
@@ -104,19 +108,47 @@ for r, t in zip(r_base2gripper, t_base2gripper):
     r_base2tag.append(T_gripper2tag[0:3, 0:3])
     t_base2tag.append(T_gripper2tag[0:3, 3])
 
+# print("t_base2tag:\n", t_base2tag)
+# print("r_base2tag:\n", r_base2tag)
+
 r_tag2base, t_tag2base = [], []
 for R, t in zip(r_base2tag, t_base2tag):
-    R_b2g = R.T
-    t_b2g = -R_b2g @ t
-    r_tag2base.append(R_b2g)
-    t_tag2base.append(t_b2g)
+    T_base2tag = np.eye(4)
+    T_base2tag[0:3, 0:3] = R
+    T_base2tag[0:3, 3] = t
+    T_tag2base = np.linalg.inv(T_base2tag)
+    R_b2t = T_tag2base[0:3, 0:3]
+    t_b2t = T_tag2base[0:3, 3]
+    r_tag2base.append(R_b2t)
+    t_tag2base.append(t_b2t)
 
+
+# print("\n\n\n")
+# print(r_tag2base)
+# print("t tag 2 base:\n", t_tag2base)
+# print("r tag 2 base:\n", r_tag2base)
+# print("cam 2 gripper:\n", t_tag_in_cam_frame)
+
+
+# Using single value
+index = 2
+T_tag2base = np.eye(4)
+T_tag2base[0:3, 0:3] = r_tag2base[index]
+T_tag2base[0:3, 3] = t_tag2base[index]
+T_cam2tag = np.eye(4)
+T_cam2tag[0:3, 0:3] = r_tag_in_cam_frame[index]
+T_cam2tag[0:3, 3] = t_tag_in_cam_frame[index]
+T_cam2base = T_cam2tag @ T_tag2base
+print("Single value tag 2 base:\n", T_tag2base)
+print("Single value cam 2 tag:\n", T_cam2tag)
+
+print("Single value cam 2 base:\n", T_cam2base)
 
 R, t = cv2.calibrateHandEye(
-        R_gripper2base=r_tag2base,
-        t_gripper2base=t_tag2base,
-        R_target2cam=r_cam2gripper, # cam to tag
-        t_target2cam=t_cam2gripper)
+        R_gripper2base=r_tag2base[:max_images+1],
+        t_gripper2base=t_tag2base[:max_images+1],
+        R_target2cam=r_tag_in_cam_frame[:max_images+1], # cam to tag
+        t_target2cam=t_tag_in_cam_frame[:max_images+1])
 print("new eye to hand calibration")
 print("R", R)
 print("t", t)
