@@ -3,6 +3,48 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation 
 
+def _skew(w):
+    return np.array([
+        [0.0, -w[2], w[1]],
+        [w[2], 0.0, -w[0]],
+        [-w[1], w[0], 0.0],
+    ])
+
+def _se3_log(T, eps=1e-9):
+    R = T[0:3, 0:3]
+    p = T[0:3, 3]
+    w = Rotation.from_matrix(R).as_rotvec()
+    theta = np.linalg.norm(w)
+    W = _skew(w)
+    if theta < eps:
+        V_inv = np.eye(3) - 0.5 * W + (1.0 / 12.0) * (W @ W)
+    else:
+        A = np.sin(theta) / theta
+        B = (1.0 - np.cos(theta)) / (theta * theta)
+        V_inv = np.eye(3) - 0.5 * W + (1.0 / (theta * theta)) * (1.0 - A / (2.0 * B)) * (W @ W)
+    v = V_inv @ p
+    return np.hstack([w, v])
+
+def _se3_exp(xi, eps=1e-9):
+    w = xi[0:3]
+    v = xi[3:6]
+    theta = np.linalg.norm(w)
+    W = _skew(w)
+    if theta < eps:
+        R = np.eye(3) + W + 0.5 * (W @ W)
+        V = np.eye(3) + 0.5 * W + (1.0 / 6.0) * (W @ W)
+    else:
+        A = np.sin(theta) / theta
+        B = (1.0 - np.cos(theta)) / (theta * theta)
+        C = (1.0 - A) / (theta * theta)
+        R = np.eye(3) + A * W + B * (W @ W)
+        V = np.eye(3) + B * W + C * (W @ W)
+    p = V @ v
+    T = np.eye(4)
+    T[0:3, 0:3] = R
+    T[0:3, 3] = p
+    return T
+
 detection_transforms = []
 max_images = 30
 for i in range(1, max_images+1):
@@ -130,26 +172,44 @@ for R, t in zip(r_base2tag, t_base2tag):
 # print("cam 2 gripper:\n", t_tag_in_cam_frame)
 
 
-# Using single value
-index = 2
-T_tag2base = np.eye(4)
-T_tag2base[0:3, 0:3] = r_tag2base[index]
-T_tag2base[0:3, 3] = t_tag2base[index]
-T_cam2tag = np.eye(4)
-T_cam2tag[0:3, 0:3] = r_tag_in_cam_frame[index]
-T_cam2tag[0:3, 3] = t_tag_in_cam_frame[index]
-T_cam2base = T_cam2tag @ T_tag2base
-print("Single value tag 2 base:\n", T_tag2base)
-print("Single value cam 2 tag:\n", T_cam2tag)
+T_cam2base_list = []
+for index in range(max_images):
+    T_tag2base = np.eye(4)
+    T_tag2base[0:3, 0:3] = r_tag2base[index]
+    T_tag2base[0:3, 3] = t_tag2base[index]
+    T_cam2tag = np.eye(4)
+    T_cam2tag[0:3, 0:3] = r_tag_in_cam_frame[index]
+    T_cam2tag[0:3, 3] = t_tag_in_cam_frame[index]
+    T_cam2base_list.append(T_cam2tag @ T_tag2base)
 
-print("Single value cam 2 base:\n", T_cam2base)
+T_mean = T_cam2base_list[0]
+for _ in range(20):
+    xi_sum = np.zeros(6)
+    for T_i in T_cam2base_list:
+        xi_sum += _se3_log(np.linalg.inv(T_mean) @ T_i)
+    xi_avg = xi_sum / len(T_cam2base_list)
+    if np.linalg.norm(xi_avg) < 1e-9:
+        break
+    T_mean = T_mean @ _se3_exp(xi_avg)
 
-R, t = cv2.calibrateHandEye(
-        R_gripper2base=r_tag2base[:max_images+1],
-        t_gripper2base=t_tag2base[:max_images+1],
-        R_target2cam=r_tag_in_cam_frame[:max_images+1], # cam to tag
-        t_target2cam=t_tag_in_cam_frame[:max_images+1])
-print("new eye to hand calibration")
-print("R", R)
-print("t", t)
-print("end")
+print("SE3 mean cam 2 base:\n", T_mean)
+# OUTPUT:
+#[[0.0200 0.9997 -0.0131 0.0966]
+#  [0.2746 -0.0180 -0.9614 0.2275]
+#  [-0.9614 0.0156 -0.2749 1.2036]
+#  [0.0000 0.0000 0.0000 1.0000]]
+
+# print("Single value tag 2 base:\n", T_tag2base)
+# print("Single value cam 2 tag:\n", T_cam2tag)
+
+# print("Single value cam 2 base:\n", T_cam2base)
+
+# R, t = cv2.calibrateHandEye(
+#         R_gripper2base=r_tag2base[:max_images+1],
+#         t_gripper2base=t_tag2base[:max_images+1],
+#         R_target2cam=r_tag_in_cam_frame[:max_images+1], # cam to tag
+#         t_target2cam=t_tag_in_cam_frame[:max_images+1])
+# print("new eye to hand calibration")
+# print("R", R)
+# print("t", t)
+# print("end")
