@@ -111,7 +111,7 @@ def get_image_points(max_images, t_base2tag, K, T_base2cam):
 def project_2d_points_on_images(max_images, points_2d):
     valid_projections = 0
     for i in range(1, max_images + 1):
-        img_path = f"./image_pose_{i}.png"
+        img_path = f"./image_pose_{i}_0121.png"
         img = cv2.imread(img_path)
         if img is None:
             print(f"Warning: Could not load {img_path}")
@@ -151,12 +151,30 @@ def project_2d_points_on_images(max_images, points_2d):
 
 # from analyze_images_complete_eye_to_hand import t_base2tag
 # The camera frame in the robot base frame from the calibration done in analyze_images_complete_eye_to_hand
-T_base2cam = np.array([[0.0200, 0.9997, -0.0131, 0.0977],
- [0.2746, -0.0180, -0.9614, 0.2931],
- [-0.9614, 0.0156, -0.2749, 1.2668],
- [0.0000, 0.0000, 0.0000, 1.0000]])
+# T_base2cam = np.array(
+#  [[0.0200, 0.9997, -0.0131, 0.0977],
+#  [0.2746, -0.0180, -0.9614, 0.2931],
+#  [-0.9614, 0.0156, -0.2749, 1.2668],
+#  [0.0000, 0.0000, 0.0000, 1.0000]])
 
-camera_params = [716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656] # fx, fy, cx, cy
+T_base2cam = np.array([ # transform obtained from the 1/21 calibrated camera using 18/30 detected images 
+ [0.9998, 0.0162, 0.0135, 0.0513],
+ [-0.0136, 0.0065, 0.9999, -0.3141],
+ [0.0161, -0.9998, 0.0067, 1.5488],
+ [0.0000 ,0.0000, 0.0000, 1.0000]])
+
+T_base2cam = T_base2cam @ np.array([
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+])
+
+# print("T_base2cam:\n", T_base2cam)
+# exit(0)
+
+# camera_params = [716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656] # fx, fy, cx, cy
+camera_params = [716.5634765625, 716.5634765625, 655.4454345703125 , 395.7761535644531]
 fx = camera_params[0]
 fy = camera_params[1]
 cx = camera_params[2]
@@ -167,7 +185,7 @@ K = np.array([[fx, 0, cx],
 max_images = 29
 
 # Load saved transforms
-t_base2gripper, r_base2gripper = load_saved_transforms("figure_eight_poses.npz")
+t_base2gripper, r_base2gripper = load_saved_transforms("figure_eight_poses_1_21.npz")
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
 
 # Plot the 3D positions of the tag locations

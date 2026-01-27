@@ -47,9 +47,17 @@ def _se3_exp(xi, eps=1e-9):
 
 def _load_apriltag_transforms(max_images):
     detection_transforms = []
+    count = 0
     for i in range(1, max_images + 1):
-        detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
+        detections = apriltag_image([f"./image_pose_{i}_0121.png"], output_images=True, display_images=True)
+        # detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
+        if detections is None or len(detections) == 0:
+            print("no detection for image ", i)
+            detection_transforms.append(None)
+            count += 1
+            continue
         detection_transforms.append(detections[1])
+    print(f"Total no detection images: {count} out of {max_images}")
     return detection_transforms
 
 
@@ -57,8 +65,12 @@ def _split_transforms(transforms):
     t_list = []
     r_list = []
     for transform in transforms:
-        t_list.append(transform[0:3, 3])
-        r_list.append(transform[0:3, 0:3])
+        if transform is None:
+            t_list.append(None)
+            r_list.append(None)
+        else:
+            t_list.append(transform[0:3, 3])
+            r_list.append(transform[0:3, 0:3])
     return t_list, r_list
 
 
@@ -106,12 +118,13 @@ def main():
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
+    positions, orientations = _load_figure_eight_poses("figure_eight_poses_1_21.npz", max_images)
+    # positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]
     r_base2gripper = orientations[0:max_images]
 
-    r_gripper2cam, t_gripper2cam = _invert_rt_pairs(r_tag_in_cam_frame, t_tag_in_cam_frame)
+    # r_gripper2cam, t_gripper2cam = _invert_rt_pairs(r_tag_in_cam_frame, t_tag_in_cam_frame)
 
 
     r_base2tag, t_base2tag = [], []
@@ -138,6 +151,9 @@ def main():
 
     t_cam2base_list = []
     for index in range(max_images):
+        if r_tag_in_cam_frame[index] is None or t_tag_in_cam_frame[index] is None:
+            print(f"Skipping image {index+1} - no detection")
+            continue
         t_tag2base_mat = np.eye(4)
         t_tag2base_mat[0:3, 0:3] = r_tag2base[index]
         t_tag2base_mat[0:3, 3] = t_tag2base[index]
