@@ -49,14 +49,23 @@ def _load_apriltag_transforms(max_images):
     detection_transforms = []
     count = 0
     for i in range(1, max_images + 1):
-        detections = apriltag_image([f"./image_pose_{i}_0121.png"], output_images=True, display_images=True)
+        detections = apriltag_image([f"./image_pose_{i}_0128.png"], output_images=True, display_images=True, tag_size=0.09, tag_family="tag16h5")
         # detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
             detection_transforms.append(None)
             count += 1
             continue
-        detection_transforms.append(detections[1])
+        expected_tag_id = 3
+        for i in range(0, len(detections), 4):
+            found = False
+            if(detections[i].tag_id == expected_tag_id):
+                if found:
+                    assert(False) #Means detected 2 tag_id 3 tags in image
+                detection_transforms.append(detections[i+1])
+                found = True
+
+        # detection_transforms.append(detections[1])
     print(f"Total no detection images: {count} out of {max_images}")
     return detection_transforms
 
@@ -107,9 +116,9 @@ def _mean_se3(transforms, max_iters=20, tol=1e-9):
         t_mean = t_mean @ _se3_exp(xi_avg)
     return t_mean
 
-gripper2tag = np.array([[0, 0, -1, 0.062],
-                            [0, 1, 0, 0],
-                            [1, 0, 0, -0.0175],
+gripper2tag = np.array(    [[0, 0, -1, 0.062],
+                            [0, -1, 0, 0],
+                            [-1, 0, 0, -0.0175],
                             [0, 0, 0, 1]])
 
 def main():
@@ -118,7 +127,7 @@ def main():
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses("figure_eight_poses_1_21.npz", max_images)
+    positions, orientations = _load_figure_eight_poses("figure_eight_poses_1_28.npz", max_images)
     # positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]

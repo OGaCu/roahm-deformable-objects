@@ -99,7 +99,7 @@ def plot_2d_points(points_2d):
 def get_image_points(max_images, t_base2tag, K, T_base2cam):
     points_2d = []
     for i in range(max_images):
-        result = project_3d_to_2d(t_base2tag[i], K, T_base2cam, use_cv2=False)
+        result = project_3d_to_2d(t_base2tag[i], K, T_base2cam, use_cv2=True)
         if result is not None:
             points_2d.append(result)
     if len(points_2d) == 0:
@@ -111,7 +111,7 @@ def get_image_points(max_images, t_base2tag, K, T_base2cam):
 def project_2d_points_on_images(max_images, points_2d):
     valid_projections = 0
     for i in range(1, max_images + 1):
-        img_path = f"./image_pose_{i}_0121.png"
+        img_path = f"./image_pose_{i}_0128.png"
         img = cv2.imread(img_path)
         if img is None:
             print(f"Warning: Could not load {img_path}")
@@ -157,11 +157,15 @@ def project_2d_points_on_images(max_images, points_2d):
 #  [-0.9614, 0.0156, -0.2749, 1.2668],
 #  [0.0000, 0.0000, 0.0000, 1.0000]])
 
-T_base2cam = np.array([ # transform obtained from the 1/21 calibrated camera using 18/30 detected images 
- [0.9998, 0.0162, 0.0135, 0.0513],
- [-0.0136, 0.0065, 0.9999, -0.3141],
- [0.0161, -0.9998, 0.0067, 1.5488],
- [0.0000 ,0.0000, 0.0000, 1.0000]])
+# transform obtained from the 1/28 calibrated camera using 30/30 detected images 
+T_base2cam = np.array(
+[[-0.9980, -0.0626, -0.0035, 0.3540],
+ [-0.0003, 0.0601, -0.9982, 0.1650],
+ [0.0627, -0.9962, -0.0600, 1.7671],
+ [0.0000, 0.0000, 0.0000, 1.0000]]
+
+ )
+# T_base2cam = np.linalg.inv(T_base2cam)
 
 T_base2cam = T_base2cam @ np.array([
     [1, 0, 0, 0],
@@ -185,7 +189,7 @@ K = np.array([[fx, 0, cx],
 max_images = 29
 
 # Load saved transforms
-t_base2gripper, r_base2gripper = load_saved_transforms("figure_eight_poses_1_21.npz")
+t_base2gripper, r_base2gripper = load_saved_transforms("figure_eight_poses_1_28.npz")
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
 
 # Plot the 3D positions of the tag locations

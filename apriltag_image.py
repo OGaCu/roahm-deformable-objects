@@ -13,6 +13,8 @@ def apriltag_image(input_images=[input_image_path],
                    output_images_path=[output_image_path],
                    display_images=True,
                    detection_window_name='AprilTag',
+                   tag_size=0.05,
+                   tag_family=None
                   ):
 
     '''
@@ -27,6 +29,8 @@ def apriltag_image(input_images=[input_image_path],
     parser = ArgumentParser(description='Detect AprilTags from static images.')
     apriltag.add_arguments(parser)
     options = parser.parse_args()
+    if tag_family:
+        options.families = tag_family
 
     '''
     Set up a reasonable search path for the apriltag DLL.
@@ -46,7 +50,7 @@ def apriltag_image(input_images=[input_image_path],
                                                detector,
                                             #    camera_params=(716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656), # original
                                                camera_params=(716.5634765625, 716.5634765625, 655.4454345703125, 395.7761535644531), #1_21 calibrated
-                                               tag_size=0.05,
+                                               tag_size=tag_size,
                                                vizualization=3,
                                                verbose=3,
                                                annotation=True
