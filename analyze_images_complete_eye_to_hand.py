@@ -1,123 +1,173 @@
 from apriltag_image import apriltag_image
 import cv2
 import numpy as np
-from scipy.spatial.transform import Rotation 
+from scipy.spatial.transform import Rotation
 
-detection_transforms = []
-max_images = 30
-for i in range(1, max_images+1):
-    detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
-    detection_transforms.append(detections[1])
-print(detection_transforms)
-t_cam2gripper = []
-r_cam2gripper = []
+def _skew(w):
+    return np.array([
+        [0.0, -w[2], w[1]],
+        [w[2], 0.0, -w[0]],
+        [-w[1], w[0], 0.0],
+    ])
 
-for detection in detection_transforms:
-    t_cam2gripper.append(detection[0:3, 3])
-    r_cam2gripper.append(detection[0:3, 0:3])
-print(t_cam2gripper)
-print(r_cam2gripper)
+def _se3_log(T, eps=1e-9):
+    R = T[0:3, 0:3]
+    p = T[0:3, 3]
+    w = Rotation.from_matrix(R).as_rotvec()
+    theta = np.linalg.norm(w)
+    W = _skew(w)
+    if theta < eps:
+        V_inv = np.eye(3) - 0.5 * W + (1.0 / 12.0) * (W @ W)
+    else:
+        A = np.sin(theta) / theta
+        B = (1.0 - np.cos(theta)) / (theta * theta)
+        V_inv = np.eye(3) - 0.5 * W + (1.0 / (theta * theta)) * (1.0 - A / (2.0 * B)) * (W @ W)
+    v = V_inv @ p
+    return np.hstack([w, v])
 
-### Base 2 Gripper transforms
-# achieved_pos1 = np.array([0.56, -0.21, 0.44])
-# achieved_ori1 = np.array([[-0.39569914, 0.04180925, 0.91742802],
-#                           [-0.69671214, 0.63717833, -0.32953904],
-#                           [-0.59834303, -0.76958155, -0.22300191]])
+def _se3_exp(xi, eps=1e-9):
+    w = xi[0:3]
+    v = xi[3:6]
+    theta = np.linalg.norm(w)
+    W = _skew(w)
+    if theta < eps:
+        R = np.eye(3) + W + 0.5 * (W @ W)
+        V = np.eye(3) + 0.5 * W + (1.0 / 6.0) * (W @ W)
+    else:
+        A = np.sin(theta) / theta
+        B = (1.0 - np.cos(theta)) / (theta * theta)
+        C = (1.0 - A) / (theta * theta)
+        R = np.eye(3) + A * W + B * (W @ W)
+        V = np.eye(3) + B * W + C * (W @ W)
+    p = V @ v
+    T = np.eye(4)
+    T[0:3, 0:3] = R
+    T[0:3, 3] = p
+    return T
 
-# achieved_pos2 = np.array([0.51, -0.26, 0.5])
-# achieved_ori2 = np.array([[-0.25095132, -0.38018741, 0.890214],
-#                           [-0.8668955, -0.32093063, -0.38143902],
-#                           [0.43071526, -0.86744514, -0.24904479]])
-
-# achieved_pos3 = np.array([0.53, -0.15, 0.55])
-# achieved_ori3 = np.array([[0.11042751, -0.29415084, 0.94935823],
-#                           [-0.48716977, -0.84859911, -0.20626481],
-#                           [0.86629751, -0.43972132, -0.23701008]])
-
-# achieved_pos4 = np.array([0.55, -0.01, 0.59])
-# achieved_ori4 = np.array([[0.12008366, -0.02115112, 0.99253844],
-#                           [-0.02115112, -0.99960059, -0.01874262],
-#                           [0.99253844, -0.01874262, -0.12048306]])
-
-# achieved_pos5 = np.array([0.44, 0.01, 0.66])
-# achieved_ori5 = np.array([[0.02715695, -0.11099294, 0.99345008],
-#                           [-0.05151567, -0.99265144, -0.10949548],
-#                           [0.99830288, -0.04820468, -0.03267526]])
-
-# achieved_pos6 = np.array([0.45, 0.08, 0.57])
-# achieved_ori6 = np.array([[0.12073953, -0.07136262, 0.99011582],
-#                           [0.77001991, -0.62274256, -0.13878416],
-#                           [0.62649126, 0.77916563, -0.020239]])
-
-# achieved_pos7 = np.array([0.51, 0.07, 0.51])
-# achieved_ori7 = np.array([[0.15814902, 0.04933581, 0.98618196],
-#                           [0.9856845, 0.05122055, -0.16063166],
-#                           [-0.05843768, 0.99746801, -0.04052907]])
-
-# achieved_pos8 = np.array([0.56, -0.04, 0.43])
-# achieved_ori8 = np.array([[0.1601518, 0.37584872, 0.91273717],
-#                           [0.7695146, 0.53158963, -0.35392054],
-#                           [-0.6182222, 0.75904559, -0.20408604]])
-
-np_info = np.load("figure_eight_poses.npz")
-positions = []
-orientations = []
-for i in range(max_images):
-    np_stuff = np_info["arr_"+str(i)]
-    positions.append(np_stuff[0:3])
-    orientations.append(Rotation.from_quat(np_stuff[3:]).as_matrix())
-
-print(positions)
-print(orientations)
-# t_base2gripper = [achieved_pos1, achieved_pos2, achieved_pos3, achieved_pos4, achieved_pos5, achieved_pos6, achieved_pos7, achieved_pos8]
-# r_base2gripper = [achieved_ori1, achieved_ori2, achieved_ori3, achieved_ori4, achieved_ori5, achieved_ori6, achieved_ori7, achieved_ori8]
-
-t_base2gripper = positions
-r_base2gripper = orientations
-
-r_gripper2cam, t_gripper2cam = [], []
-for R, t in zip(r_cam2gripper, t_cam2gripper):
-    R_b2g = R.T
-    t_b2g = -R_b2g @ t
-    r_gripper2cam.append(R_b2g)
-    t_gripper2cam.append(t_b2g)
-
-gripper2tag = np.array([[0, 1, 0, 0],
-                        [1, 0, 0, 0.062], 
-                        [0, 0, -1, 0.0175], 
-                        [0, 0, 0, 1]])
-# gripper2tag = np.array([[0, 1, 0, 0],
-#                         [1, 0, 0, 0], 
-#                         [0, 0, -1, 0], 
-#                         [0, 0, 0, 1]])
+def _load_apriltag_transforms(max_images):
+    detection_transforms = []
+    count = 0
+    for i in range(1, max_images + 1):
+        detections = apriltag_image([f"./image_pose_{i}_0121.png"], output_images=True, display_images=True)
+        # detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
+        if detections is None or len(detections) == 0:
+            print("no detection for image ", i)
+            detection_transforms.append(None)
+            count += 1
+            continue
+        detection_transforms.append(detections[1])
+    print(f"Total no detection images: {count} out of {max_images}")
+    return detection_transforms
 
 
-r_base2tag, t_base2tag = [], []
-for r, t in zip(r_base2gripper, t_base2gripper):
-    T_base2gripper = np.eye(4)
-    T_base2gripper[0:3, 0:3] = r
-    T_base2gripper[0:3, 3] = t
+def _split_transforms(transforms):
+    t_list = []
+    r_list = []
+    for transform in transforms:
+        if transform is None:
+            t_list.append(None)
+            r_list.append(None)
+        else:
+            t_list.append(transform[0:3, 3])
+            r_list.append(transform[0:3, 0:3])
+    return t_list, r_list
 
 
-    T_gripper2tag = T_base2gripper @ gripper2tag
-    # print(T_gripper2tag)
-    r_base2tag.append(T_gripper2tag[0:3, 0:3])
-    t_base2tag.append(T_gripper2tag[0:3, 3])
-
-r_tag2base, t_tag2base = [], []
-for R, t in zip(r_base2tag, t_base2tag):
-    R_b2g = R.T
-    t_b2g = -R_b2g @ t
-    r_tag2base.append(R_b2g)
-    t_tag2base.append(t_b2g)
+def _load_figure_eight_poses(npz_path, max_images):
+    np_info = np.load(npz_path)
+    positions = []
+    orientations = []
+    for i in range(max_images):
+        np_stuff = np_info["arr_" + str(i)]
+        positions.append(np_stuff[0:3])
+        orientations.append(Rotation.from_quat(np_stuff[3:]).as_matrix())
+    return positions, orientations
 
 
-R, t = cv2.calibrateHandEye(
-        R_gripper2base=r_tag2base,
-        t_gripper2base=t_tag2base,
-        R_target2cam=r_cam2gripper, # cam to tag
-        t_target2cam=t_cam2gripper)
-print("new eye to hand calibration")
-print("R", R)
-print("t", t)
-print("end")
+def _invert_rt_pairs(r_list, t_list):
+    r_out, t_out = [], []
+    for r, t in zip(r_list, t_list):
+        r_inv = r.T
+        t_inv = -r_inv @ t
+        r_out.append(r_inv)
+        t_out.append(t_inv)
+    return r_out, t_out
+
+
+def _mean_se3(transforms, max_iters=20, tol=1e-9):
+    t_mean = transforms[0]
+    for _ in range(max_iters):
+        xi_sum = np.zeros(6)
+        for t_i in transforms:
+            xi_sum += _se3_log(np.linalg.inv(t_mean) @ t_i)
+        xi_avg = xi_sum / len(transforms)
+        if np.linalg.norm(xi_avg) < tol:
+            break
+        t_mean = t_mean @ _se3_exp(xi_avg)
+    return t_mean
+
+gripper2tag = np.array([[0, 0, -1, 0.062],
+                            [0, 1, 0, 0],
+                            [1, 0, 0, -0.0175],
+                            [0, 0, 0, 1]])
+
+def main():
+    max_images = 30
+    detection_transforms = _load_apriltag_transforms(max_images)
+
+    t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
+
+    positions, orientations = _load_figure_eight_poses("figure_eight_poses_1_21.npz", max_images)
+    # positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
+
+    t_base2gripper = positions[0:max_images]
+    r_base2gripper = orientations[0:max_images]
+
+    # r_gripper2cam, t_gripper2cam = _invert_rt_pairs(r_tag_in_cam_frame, t_tag_in_cam_frame)
+
+
+    r_base2tag, t_base2tag = [], []
+    for r, t in zip(r_base2gripper, t_base2gripper):
+        t_base2gripper_mat = np.eye(4)
+        t_base2gripper_mat[0:3, 0:3] = r
+        t_base2gripper_mat[0:3, 3] = t
+
+        t_base2tag_mat = t_base2gripper_mat @ gripper2tag
+        r_base2tag.append(t_base2tag_mat[0:3, 0:3])
+        t_base2tag.append(t_base2tag_mat[0:3, 3])
+
+    r_tag2base, t_tag2base = [], []
+    for r, t in zip(r_base2tag, t_base2tag):
+        t_base2tag_mat = np.eye(4)
+        t_base2tag_mat[0:3, 0:3] = r
+        t_base2tag_mat[0:3, 3] = t
+        t_tag2base_mat = np.linalg.inv(t_base2tag_mat)
+        r_b2t = t_tag2base_mat[0:3, 0:3]
+        t_b2t = t_tag2base_mat[0:3, 3]
+        r_tag2base.append(r_b2t)
+        t_tag2base.append(t_b2t)
+
+
+    t_cam2base_list = []
+    for index in range(max_images):
+        if r_tag_in_cam_frame[index] is None or t_tag_in_cam_frame[index] is None:
+            print(f"Skipping image {index+1} - no detection")
+            continue
+        t_tag2base_mat = np.eye(4)
+        t_tag2base_mat[0:3, 0:3] = r_tag2base[index]
+        t_tag2base_mat[0:3, 3] = t_tag2base[index]
+        t_cam2tag_mat = np.eye(4)
+        t_cam2tag_mat[0:3, 0:3] = r_tag_in_cam_frame[index]
+        t_cam2tag_mat[0:3, 3] = t_tag_in_cam_frame[index]
+        t_cam2base_list.append(t_cam2tag_mat @ t_tag2base_mat)
+
+    print("LAST CAM2BASE")
+    print(t_cam2base_list[-1])
+
+    t_mean = _mean_se3(t_cam2base_list)
+    print("SE3 mean cam 2 base:\n", t_mean)
+
+
+if __name__ == "__main__":
+    main()
