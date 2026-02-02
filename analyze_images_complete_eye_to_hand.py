@@ -49,7 +49,7 @@ def _load_apriltag_transforms(max_images):
     detection_transforms = []
     count = 0
     for i in range(1, max_images + 1):
-        detections = apriltag_image([f"./image_pose_{i}_0128.png"], output_images=True, display_images=True, tag_size=0.09, tag_family="tag16h5")
+        detections = apriltag_image([f"/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11")
         # detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
@@ -127,7 +127,7 @@ def main():
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses("figure_eight_poses_1_28.npz", max_images)
+    positions, orientations = _load_figure_eight_poses("/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/poses/figure_eight_poses_1_28.npz", max_images)
     # positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]

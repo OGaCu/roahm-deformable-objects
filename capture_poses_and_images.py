@@ -86,7 +86,7 @@ while t < max_time:
         if zed.grab(runtime_params) == sl.ERROR_CODE.SUCCESS:
             zed.retrieve_image(image, sl.VIEW.LEFT) # can we get a combined mixed view?
             frame = image.get_data()
-            cv2.imwrite(f"image_pose_{pose_count}.png", frame)
+            cv2.imwrite(f"/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/images/image_pose_{pose_count}.png", frame)
             print(f"Image Captured {pose_count}")
             # detections = apriltag_image([f"./image_pose_{pose_count}.png"], output_images=True, display_images=True)
             # print("Detections: ", detections[1])
@@ -111,7 +111,7 @@ while t < max_time:
 
     t += 1.0 / ctrl_freq
 
-np.savez("figure_eight_poses_1_28.npz", *pose_list)
+np.savez("/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/poses/figure_eight_poses_1_28.npz", *pose_list)
 
 while t < max_time + 1.0:
     # Just wait a bit for the end effector to settle
