@@ -1,2 +1,5 @@
 AprilTag/
 my310env/
+__pycache__/*
+image_pose*
+figure_eight_poses*
