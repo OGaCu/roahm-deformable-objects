@@ -149,23 +149,8 @@ def project_2d_points_on_images(max_images, points_2d, DATAPATH):
     print(f"\n=== Dry Run Complete ===")
     print(f"Valid projections: {valid_projections}/{max_images}\n")
 
-# from analyze_images_complete_eye_to_hand import t_base2tag
-# The camera frame in the robot base frame from the calibration done in analyze_images_complete_eye_to_hand
-# T_base2cam = np.array(
-#  [[0.0200, 0.9997, -0.0131, 0.0977],
-#  [0.2746, -0.0180, -0.9614, 0.2931],
-#  [-0.9614, 0.0156, -0.2749, 1.2668],
-#  [0.0000, 0.0000, 0.0000, 1.0000]])
-
-# transform obtained from the 1/28 calibrated camera using 30/30 detected images 
-T_base2cam = np.array(
-[[-0.9986, -0.0080, -0.0516, 0.3074],
- [0.0518, -0.0291, -0.9982, 0.4037],
- [0.0065, -0.9995, 0.0295, 1.2454],
- [0.0000, 0.0000, 0.0000, 1.0000]]
-
- )
-DATAPATH = "/Users/alexanderbowler/Documents/roahm_lab/calibration/AprilTag/roahm-deformable-objects"
+DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
+#Transform obtained form the analyze
 T_base2cam = np.load(f"{DATAPATH}/poses/cam2base_transform.npz")['arr_0']
 # print("T_base2cam:\n", T_base2cam["arr_0"])
 # T_base2cam = np.linalg.inv(T_base2cam)

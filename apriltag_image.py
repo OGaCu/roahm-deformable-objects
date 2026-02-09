@@ -48,8 +48,7 @@ def apriltag_image(input_images=[input_image_path],
 
         result, overlay = apriltag.detect_tags(img,
                                                detector,
-                                            #    camera_params=(716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656), # original
-                                               camera_params=(716.5634765625, 716.5634765625, 655.4454345703125, 395.7761535644531), #1_21 calibrated
+                                               camera_params=(716.5634765625, 716.5634765625, 655.4454345703125, 395.7761535644531), #calibrated params
                                                tag_size=tag_size,
                                                vizualization=3,
                                                verbose=3,

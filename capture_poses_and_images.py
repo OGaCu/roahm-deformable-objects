@@ -105,7 +105,7 @@ while t < max_time:
     t += 1.0 / ctrl_freq
 
 # save all poses
-np.savez(f"{DATAPATH}/poses/figure_eight_poses_1_28.npz", *pose_list)
+np.savez(f"{DATAPATH}/poses/figure_eight_poses.npz", *pose_list)
 
 print("Waiting for robot to settle...")
 time.sleep(1.0)

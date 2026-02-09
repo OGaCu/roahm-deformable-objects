@@ -50,7 +50,6 @@ def _load_apriltag_transforms(max_images, DATAPATH):
     count = 0
     for i in range(1, max_images + 1):
         detections = apriltag_image([f"{DATAPATH}/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11")
-        # detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
             detection_transforms.append(None)
@@ -65,7 +64,6 @@ def _load_apriltag_transforms(max_images, DATAPATH):
                 detection_transforms.append(detections[i+1])
                 found = True
 
-        # detection_transforms.append(detections[1])
     print(f"Total no detection images: {count} out of {max_images}")
     return detection_transforms
 
@@ -123,20 +121,17 @@ gripper2tag = np.array(    [[0, 0, -1, 0.02],
 
 def main():
     max_images = 30
-    # DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
-    DATAPATH = "/Users/alexanderbowler/Documents/roahm_lab/calibration/AprilTag/roahm-deformable-objects"
+    DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 
     detection_transforms = _load_apriltag_transforms(max_images, DATAPATH)
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses(f"{DATAPATH}/poses/figure_eight_poses_1_28.npz", max_images)
-    # positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
+    positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]
     r_base2gripper = orientations[0:max_images]
 
-    # r_gripper2cam, t_gripper2cam = _invert_rt_pairs(r_tag_in_cam_frame, t_tag_in_cam_frame)
 
 
     r_base2tag, t_base2tag = [], []
@@ -161,7 +156,7 @@ def main():
         t_tag2base.append(t_b2t)
 
 
-    t_cam2base_list = []
+    t_base2cam_list = []
     for index in range(max_images):
         if r_tag_in_cam_frame[index] is None or t_tag_in_cam_frame[index] is None:
             print(f"Skipping image {index+1} - no detection")
@@ -172,14 +167,11 @@ def main():
         t_cam2tag_mat = np.eye(4)
         t_cam2tag_mat[0:3, 0:3] = r_tag_in_cam_frame[index]
         t_cam2tag_mat[0:3, 3] = t_tag_in_cam_frame[index]
-        t_cam2base_list.append(t_cam2tag_mat @ t_tag2base_mat)
+        t_base2cam_list.append(t_cam2tag_mat @ t_tag2base_mat)
 
-    print("LAST CAM2BASE")
-    print(t_cam2base_list[-1])
-
-    t_mean = _mean_se3(t_cam2base_list)
-    print("SE3 mean cam 2 base:\n", t_mean)
-    np.savez(f"{DATAPATH}/poses/cam2base_transform.npz", t_mean)
+    base2cam_mean = _mean_se3(t_base2cam_list)
+    print("SE3 mean base 2 cam:\n", base2cam_mean)
+    np.savez(f"{DATAPATH}/poses/base2cam_transform.npz", base2cam_mean)
 
 
 if __name__ == "__main__":
