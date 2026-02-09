@@ -45,11 +45,11 @@ def _se3_exp(xi, eps=1e-9):
     T[0:3, 3] = p
     return T
 
-def _load_apriltag_transforms(max_images):
+def _load_apriltag_transforms(max_images, DATAPATH):
     detection_transforms = []
     count = 0
     for i in range(1, max_images + 1):
-        detections = apriltag_image([f"/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11")
+        detections = apriltag_image([f"{DATAPATH}/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11")
         # detections = apriltag_image([f"./image_pose_{i}.png"], output_images=True, display_images=True)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
@@ -123,11 +123,13 @@ gripper2tag = np.array(    [[0, 0, -1, 0.062],
 
 def main():
     max_images = 30
-    detection_transforms = _load_apriltag_transforms(max_images)
+    DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
+
+    detection_transforms = _load_apriltag_transforms(max_images, DATAPATH)
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses("/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/poses/figure_eight_poses_1_28.npz", max_images)
+    positions, orientations = _load_figure_eight_poses(f"{DATAPATH}/poses/figure_eight_poses_1_28.npz", max_images)
     # positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]
@@ -176,6 +178,7 @@ def main():
 
     t_mean = _mean_se3(t_cam2base_list)
     print("SE3 mean cam 2 base:\n", t_mean)
+    np.savez(f"{DATAPATH}/poses/cam2base_transform.npz", *t_mean)
 
 
 if __name__ == "__main__":

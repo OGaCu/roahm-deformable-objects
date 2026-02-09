@@ -21,6 +21,9 @@ sin_freq_y = 0.25  # rot / s
 sin_freq_z = 0.125  # rot / s
 max_time = 8.0
 
+# Setup Params
+initial_rotation = np.pi/2 # rotation arounnd robot z axis (counterclockwise)
+
 left_arm.controller_switcher_client.switch_controller("cartesian_impedance_controller")
 left_arm.cartesian_controller_parameters_client.load_param_config(
     file_path="config/control/default_cartesian_impedance.yaml"
@@ -31,9 +34,14 @@ print("Starting to draw a circle...")
 t = 0.0
 target_pose = left_arm.end_effector_pose.copy()
 print("taget_pose_rotation:", target_pose.orientation)
-target_pose.orientation = Rotation.from_matrix(np.array([[0.0, 1.0, 0.0],
-                                                          [1.0, 0.0, 0.0],
-                                                          [0.0, 0.0, -1.0]]))
+original_rotation = np.array([  [1.0, 0.0, 0.0],
+                                [0.0, -1.0, 0.0],
+                                [0.0, 0.0, -1.0]])
+turn_rotation = np.array([  [np.cos(initial_rotation), -1 * np.sin(initial_rotation), 0.0],
+                                [np.sin(initial_rotation), np.cos(initial_rotation), 0.0],
+                                [0.0, 0.0, 1.0]])
+target_pose.orientation = Rotation.from_matrix(turn_rotation @ original_rotation)
+
 center = np.array([0.0, 0.4, 0.4])
 target_pose.position = np.array([0.0, 0.4, 0.4])
 print("taget_pose_rotation:", target_pose)
@@ -60,6 +68,8 @@ DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calib
 while t < max_time:
     
     if frame_count % 13 == 0:
+        # Wait for arm to settle
+        time.sleep(0.5)
         # Save the pose
         p = left_arm.end_effector_pose.copy()
         pose_list.append(np.array([p.position[0], p.position[1], p.position[2],
@@ -73,7 +83,11 @@ while t < max_time:
             cv2.imwrite(f"{DATAPATH}/images/image_pose_{pose_count}.png", frame)
             print(f"Image Captured {pose_count}")
             pose_count += 1
-        input("Press Enter to continue...")
+        else:
+            print(f"ERROR: Failed to capture image {pose_count}")
+            pose_count += 1
+
+        # input("Press Enter to continue...")
         
 
     frame_count += 1
