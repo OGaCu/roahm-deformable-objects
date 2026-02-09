@@ -68,10 +68,23 @@ def project_3d_to_2d(point_3d, K, T_base2cam, use_cv2=False):
     """
     # Transform point to camera frame
     if not use_cv2:
-        point_base_homog = np.hstack([point_3d, 1.0])[[-0.9980, -0.0626, -0.0035, 0.3540],
- [-0.0003, 0.0601, -0.9982, 0.1650],
- [0.0627, -0.9962, -0.0600, 1.7671],
- [0.0000, 0.0000, 0.0000, 1.0000]]
+        point_base_homog = np.hstack([point_3d, 1.0])
+        point_cam = (T_base2cam @ point_base_homog)[:3]
+        # Check if point is in front of camera
+        if point_cam[2] <= 0:
+            print(f"Warning: Point behind camera (z={point_cam[2]})")
+            return None
+        # Project using intrinsics
+        point_img_homog = K @ point_cam
+        point_2d = point_img_homog[:2] / point_img_homog[2]
+    else:
+        point_3d = point_3d.reshape(1, 1, 3)
+        r_vec, _ = cv2.Rodrigues(T_base2cam[:3, :3])
+        t_vec = T_base2cam[:3, 3]
+        point_2d, _ = cv2.projectPoints(point_3d, r_vec, t_vec, K, distCoeffs=None)
+    return point_2d.reshape(1, 1, 2)
+
+
 def plot_2d_points(points_2d):
     colors = np.linspace(0.0, 1.0, len(points_2d))
     plt.figure()
@@ -95,10 +108,10 @@ def get_image_points(max_images, t_base2tag, K, T_base2cam):
     points_2d = np.array([p.reshape(2) for p in points_2d])
     return points_2d
 
-def project_2d_points_on_images(max_images, points_2d):
+def project_2d_points_on_images(max_images, points_2d, DATAPATH):
     valid_projections = 0
     for i in range(1, max_images + 1):
-        img_path = f"/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/images/image_pose_{i}.png"
+        img_path = f"{DATAPATH}/images/image_pose_{i}.png"
         img = cv2.imread(img_path)
         if img is None:
             print(f"Warning: Could not load {img_path}")
@@ -152,19 +165,10 @@ T_base2cam = np.array(
  [0.0000, 0.0000, 0.0000, 1.0000]]
 
  )
-T_base2cam = np.load("/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/poses/cam2base_transform.npz")['arr_0']
+DATAPATH = "/Users/alexanderbowler/Documents/roahm_lab/calibration/AprilTag/roahm-deformable-objects"
+T_base2cam = np.load(f"{DATAPATH}/poses/cam2base_transform.npz")['arr_0']
 # print("T_base2cam:\n", T_base2cam["arr_0"])
 # T_base2cam = np.linalg.inv(T_base2cam)
-
-T_base2cam = T_base2cam @ np.array([
-    [1, 0, 0, 0],
-    [0, 1, 0, 0],
-    [0, 0, 1, 0],
-    [0, 0, 0, 1]
-])
-
-# print("T_base2cam:\n", T_base2cam)
-# exit(0)
 
 # camera_params = [716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656] # fx, fy, cx, cy
 camera_params = [716.5634765625, 716.5634765625, 655.4454345703125 , 395.7761535644531]
@@ -178,7 +182,7 @@ K = np.array([[fx, 0, cx],
 max_images = 29
 
 # Load saved transforms
-t_base2gripper, r_base2gripper = load_saved_transforms("/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/poses/figure_eight_poses_1_28.npz")
+t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/figure_eight_poses_1_28.npz")
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
 
 # Plot the 3D positions of the tag locations
@@ -188,4 +192,4 @@ ground_truth_3d_plot(t_base2tag)
 points_2d = get_image_points(max_images, t_base2tag, K, T_base2cam)
 plot_2d_points(points_2d)
 
-project_2d_points_on_images(max_images, points_2d)
+project_2d_points_on_images(max_images, points_2d, DATAPATH)

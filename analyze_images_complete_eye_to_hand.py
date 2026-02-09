@@ -116,14 +116,15 @@ def _mean_se3(transforms, max_iters=20, tol=1e-9):
         t_mean = t_mean @ _se3_exp(xi_avg)
     return t_mean
 
-gripper2tag = np.array(    [[0, 0, -1, 0.062],
+gripper2tag = np.array(    [[0, 0, -1, 0.02],
                             [0, -1, 0, 0],
-                            [-1, 0, 0, -0.0175],
+                            [-1, 0, 0, 0.08],
                             [0, 0, 0, 1]])
 
 def main():
     max_images = 30
-    DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
+    # DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
+    DATAPATH = "/Users/alexanderbowler/Documents/roahm_lab/calibration/AprilTag/roahm-deformable-objects"
 
     detection_transforms = _load_apriltag_transforms(max_images, DATAPATH)
 

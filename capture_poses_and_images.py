@@ -69,7 +69,7 @@ while t < max_time:
     
     if frame_count % 13 == 0:
         # Wait for arm to settle
-        time.sleep(0.5)
+        time.sleep(1.0)
         # Save the pose
         p = left_arm.end_effector_pose.copy()
         pose_list.append(np.array([p.position[0], p.position[1], p.position[2],
