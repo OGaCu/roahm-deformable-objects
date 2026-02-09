@@ -178,7 +178,7 @@ def main():
 
     t_mean = _mean_se3(t_cam2base_list)
     print("SE3 mean cam 2 base:\n", t_mean)
-    np.savez(f"{DATAPATH}/poses/cam2base_transform.npz", *t_mean)
+    np.savez(f"{DATAPATH}/poses/cam2base_transform.npz", t_mean)
 
 
 if __name__ == "__main__":

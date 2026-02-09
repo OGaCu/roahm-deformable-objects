@@ -152,6 +152,8 @@ T_base2cam = np.array(
  [0.0000, 0.0000, 0.0000, 1.0000]]
 
  )
+T_base2cam = np.load("/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects/poses/cam2base_transform.npz")['arr_0']
+# print("T_base2cam:\n", T_base2cam["arr_0"])
 # T_base2cam = np.linalg.inv(T_base2cam)
 
 T_base2cam = T_base2cam @ np.array([
