@@ -140,7 +140,7 @@ def main():
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses("figure_eight_poses.npz", max_images)
+    positions, orientations = _load_figure_eight_poses(f"{DATAPATH}/poses/figure_eight_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]
     r_base2gripper = orientations[0:max_images]

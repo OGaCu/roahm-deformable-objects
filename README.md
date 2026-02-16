@@ -1,171 +1,111 @@
-# Move some robots
+# Hand-to-Eye Calibration (Base-to-Camera)
 
-## Data Collection Pipeline
+This repository runs a two-step pipeline to calibrate the robot base frame to the camera using an AprilTag on the end-effector: first capture poses and images while the robot moves, then compute the base-to-camera transform from those inputs.
 
-There are a lot of terminals to open and commands to run to get this to work
+---
 
-Do the following in order:
+## Pipeline Overview
+0. **Setup:**  Close the endeffector of the arm and place the large 3D printed April tag mount on the end, make sure the PC is connected to the pandas arm and the docker container is running.
+1. **Step 1:** Run `capture_poses_and_images.py` to move the robot in a figure-eight pattern and record end-effector poses and camera images at each sample.
+2. **Step 2:** Run `calculate_base_to_cam.py` to load those images and poses, detect the AprilTag, and compute the mean base-to-camera transform.
 
-**Launch Dual Franka**
+Run both scripts from the **repository root**. Step 2 reads poses from `DATAPATH/poses/figure_eight_poses.npz` and images from `DATAPATH/images/` (the same `DATAPATH` used in the scripts).
 
-Terminal 1:
+---
 
-```
-cd move_some_robots/crisp/crisp_controllers_demos/
-LEFT_ROBOT_IP=192.168.2.3 RIGHT_ROBOT_IP=192.168.2.2 docker compose up launch_dual_franka
-```
+## Step 1: Capture Poses and Images
 
-**Launch Camera ROS Dockers**
+**Script:** `capture_poses_and_images.py`
 
-Terminal 2:
-```
-cd move_some_robots/crisp/crisp_controllers_demos/
-docker compose up launch_realsense_camera_right
-```
+Moves the robot arm in a figure-eight pattern and captures images of the AprilTag at each sample pose.
 
-Terminal 3:
-```
-cd move_some_robots/crisp/crisp_controllers_demos/
-docker compose up launch_realsense_camera_wrist
-```
-Terminal 4:
-```
-docker exec -it crisp_controllers_demos_realsense_right /bin/bash
-source /opt/ros/humble/setup.bash
-ros2 topic list # you should see topics in the format '/right/right_wall_camera' or '/wrist/wrist_XXX'
-rqt # you should see a camera feed
-```
+### Command-line arguments
 
-**Start Gripper**
+| Argument     | Choices      | Default  | Description                          |
+|-------------|--------------|----------|--------------------------------------|
+| `--camera`  | `azure`, `zed` | `azure` | Camera to use for capture.           |
 
-Terminal 5:
-```
-cd move_some_robots/crisp_env/crisp_py
-pixi shell -e humble
-python examples/08c.py
-```
-Use the SPACE bar or attach a clicker and press the bottom right button to toggle the gripper
+### Example
 
+```bash
+# Use Azure Kinect (default)
+python capture_poses_and_images.py
 
-**Start Recording**
-```
-cd move_some_robots/crisp_gym
-pixi shell -e humble-lerobot
-python scripts/record_lerobot_format_leader_follower.py
-```
-Press **r** to start recording, **p** to pause the recording, **s** to save the recording, and **q** to end the program.
-
-The following parameters are worth changing when you run the python script: `task`, `repo_id`, `fps`, `num_episodes`, `resume`.
-
-```
-python scripts/record_lerobot_format_leader_follower.py \
-    --task "pour the water" \
-    --fps 10 \
-    --num-episodes 5 \
-    --resume
+# Use ZED
+python capture_poses_and_images.py --camera zed
 ```
 
-Videos are stored in `~/.cache/huggingface/{repo_id}/videos`. To see a video and check if it works, use vlc to open the video (the video won't load in any other way):
+### Outputs (saved under `DATAPATH` in the script)
 
-```
-vlc ~/.cache/huggingface/lerobot/test/videos/chunk-000/observation.images.{wall or wrist}/episode_{episode_number formatted to 6 digits}.mp4
-```
+- **Poses:** `poses/figure_eight_poses.npz`  
+  - End-effector poses (position + quaternion) for each sample.
+- **Images:** `images/image_pose_0.png`, `images/image_pose_1.png`, …  
+  - One image per sample; used in step 2 for AprilTag detection.
 
-**Note**: Repo id has to match one that's in huggingface.
+`DATAPATH` is set inside the script (e.g. to the repo path). Ensure the `poses/` and `images/` directories exist under that path, or the script will need to create them.
 
-**ALT: Start teleop without recording**
-```
-cd move_some_robots/crisp_gym
-pixi shell -e humble-lerobot
-python examples/03b.py
-```
+---
 
+## Step 2: Calculate Base-to-Camera Transform
 
-## Using 1 Robot
+**Script:** `calculate_base_to_cam.py`
 
-### Terminal 1:
-```
-cd move_some_robots/crisp/crisp_controllers_demos/
-ROBOT_IP=192.168.2.2 docker compose up launch_franka
-```
-192.168.2.3 for the left robot \
-192.168.2.2 for the right robot
+Loads the captured images and poses, runs AprilTag detection (using the same camera intrinsics as in step 1), and computes the mean base-to-camera transform.
 
-### Terminal 2:
-```
-cd move_some_robots/crisp_env/crisp_py
-pixi shell -e humble
-python examples/02b_joint_controls.py
-```
+### Command-line arguments
 
-### Explanation of the codes
-*`crisp_env/crisp_py/examples/02b_joint_controls.py`* \
-Will continuously prompt you to enter an input in `a,b` format where a is an int [0,7] representing the joint number and b is a float [-1,1] representing how much to move it by.
+| Argument     | Choices      | Default  | Description                                                                 |
+|-------------|--------------|----------|-----------------------------------------------------------------------------|
+| `--camera`  | `azure`, `zed` | `azure` | Camera used during capture; selects which intrinsics to use for detection. |
 
-## Using 2 Robots
+### Example
 
-### Terminal 1:
+```bash
+# If you used Azure in step 1 (default)
+python calculate_base_to_cam.py
 
-```
-LEFT_ROBOT_IP=192.168.2.3 RIGHT_ROBOT_IP=192.168.2.2 docker compose up launch_dual_franka
+# If you used ZED in step 1
+python calculate_base_to_cam.py --camera zed
 ```
 
-### Terminal 2:
+Use the **same** `--camera` value as in step 1 so intrinsics match the images.
 
-cd move_some_robots/crisp_gym
-pixi shell -e humble-lerobot
-python examples/03a.py
+### Inputs (expected by the script)
 
-### Explanation of the codes
-*`crisp_gym/examples/03b.py`* \
-Will allow teleoperation (hard coded such that right is leader and left is follower). Note: the gripper doesn't work
+- **Images:** `DATAPATH/images/image_pose_1.png` … `image_pose_{max_images}.png`
+- **Poses:** `DATAPATH/poses/figure_eight_poses.npz` (written by step 1).
 
-*`crisp_env/crisp_py/examples/08c.py`* \
-This will allow you to control the gripper by publishing to a ros node.
-Use SPACE ( ) or PERIOD (.) to toggle the gripper open or closed. (Hint: on a clicker, the present button is period)
+### Outputs
 
-## Connect Cameras
+- **Transform:** `poses/base2cam_transform.npz`  
+  - Single 4×4 SE(3) matrix: base-to-camera transform (saved under `DATAPATH` in the script).
 
-### Terminal 1a
-```
-docker compose up launch_realsense_camera_right
-```
-### Terminal 1b
-```
-docker compose up launch_realsense_camera_wrist
-```
-### Terminal 2
-```
-docker exec -it crisp_controllers_demos_realsense_right /bin/bash
-source /opt/ros/humble/setup.bash
-ros2 topic list # you should see topics in the format '/right/right_wall_camera' or '/wrist/wrist_XXX'
-rqt # you should see a camera feed
-```
+The script also prints the mean base-to-camera matrix to the console.
 
-## Important notes
+---
 
-### Issue with joint_control.yaml
+## Dependencies
 
-When running a teleop example in `crisp_gym` there was an error:
-`joint_control.yaml` was hard coded to be for the 'right' robot, however I want the left robot to be the follower.
-`jc.yaml` is in crisp_py, which is a different folder than crisp_gym (the crisp_py that's in this repo isn't what's used, it's `pip` installed separately).
+- **Python:** NumPy, OpenCV (`cv2`), SciPy (`scipy.spatial.transform`).
+- **Step 1 (capture):**
+  - **Robot:** `crisp_py.robot` (Robot interface).
+  - **Cameras:**  
+    - ZED: `pyzed.sl` (ZED SDK).  
+    - Azure: `k4a` (Azure Kinect SDK).
+  - **Config:** `config/control/default_cartesian_impedance.yaml` (used when crisp_py code is enabled).
+- **Step 2 (calculate):**
+  - **AprilTag:** `apriltag` (AprilTag detection).
+  - **Intrinsics:** `azure_intrinsics` from `azure_intrinsics.py` for Azure; ZED intrinsics are defined in `apriltag_image.py`.
 
-To fix this, I modified `move_some_robots/crisp_gym/.pixi/envs/humble-lerobot/lib/python3.11/site-packages/crisp_py/config/control/joint_control.yaml` to have each `nullspace.weights.right_fr3_jointX.value` to be `nullspace.weights.left_fr3_jointX.value`. Please note this if you need to make the same modification.
+Install the ZED SDK / Azure Kinect SDK and the corresponding Python bindings as required for the camera you use.
 
+---
 
-# Running up Pi0
+## Summary
 
-1. Follow steps for setting up 1 robot
-2. Run the following commands (they are written where it's assumed you're already in `move_some_robots/`):
+| Step | Script                      | Main output                          |
+|------|-----------------------------|--------------------------------------|
+| 1    | `capture_poses_and_images.py` | `poses/figure_eight_poses.npz`, `images/image_pose_*.png` |
+| 2    | `calculate_base_to_cam.py`  | `poses/base2cam_transform.npz`       |
 
-```
-cd openpi
-uv sync
-cd third_party/crisp_py
-pixi shell -e humble
-cd ../..
-./examples/run_move_some_robot.sh
-```
-Before running, make sure that the robot is active, the gripper is plugged in, and the camera is connected to the computer.
-
-To modify the task, modify `openpi/examples/task.txt`. Once you save the file, the task will auto update in the running script.
+Use `--camera azure` or `--camera zed` consistently in both steps so intrinsics match your capture camera.
