@@ -127,6 +127,12 @@ while t < max_time:
             color_image_data = color_image.data  # NumPy array (BGRA)
             color_bgr = cv2.cvtColor(color_image_data, cv2.COLOR_BGRA2BGR)
             cv2.imwrite(f"{DATAPATH}/images/image_pose_{pose_count}.png", color_bgr)
+            # Save full RGB-D as npz (color BGR, depth raw uint16 in mm)
+            depth_image = capture.depth
+            save_kw = {"color": color_bgr}
+            if depth_image is not None:
+                save_kw["depth"] = depth_image.data
+            np.savez(f"{DATAPATH}/images/rgbd_pose_{pose_count}.npz", **save_kw)
             print(f"Image Captured {pose_count}")
             pose_count += 1
             if status != k4a.EStatus.SUCCEEDED:
