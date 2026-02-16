@@ -1,3 +1,5 @@
+import argparse
+
 from apriltag_image import apriltag_image
 import cv2
 import numpy as np
@@ -45,11 +47,11 @@ def _se3_exp(xi, eps=1e-9):
     T[0:3, 3] = p
     return T
 
-def _load_apriltag_transforms(max_images, DATAPATH):
+def _load_apriltag_transforms(max_images, DATAPATH, camera="azure"):
     detection_transforms = []
     count = 0
     for i in range(1, max_images + 1):
-        detections = apriltag_image([f"{DATAPATH}/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11")
+        detections = apriltag_image([f"{DATAPATH}/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11", camera=camera)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
             detection_transforms.append(None)
@@ -120,10 +122,21 @@ gripper2tag = np.array(    [[0, 0, -1, 0.02],
                             [0, 0, 0, 1]])
 
 def main():
+    parser = argparse.ArgumentParser(description="Calculate base-to-camera transform from poses and AprilTag detections.")
+    parser.add_argument(
+        "--camera",
+        type=str,
+        choices=["azure", "zed"],
+        default="azure",
+        help="Camera used for capture: 'azure' or 'zed' (default: azure)",
+    )
+    args = parser.parse_args()
+    camera = args.camera
+
     max_images = 30
     DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 
-    detection_transforms = _load_apriltag_transforms(max_images, DATAPATH)
+    detection_transforms = _load_apriltag_transforms(max_images, DATAPATH, camera=camera)
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
