@@ -1,11 +1,25 @@
 """Moves the robot arm in a figure eight pattern and captures images of the AprilTag."""
 
+import argparse
 import numpy as np
 from crisp_py.robot import Robot
 from scipy.spatial.transform import Rotation
 import pyzed.sl as sl
 import cv2
 import time
+import k4a
+
+
+parser = argparse.ArgumentParser(description="Capture poses and images with specified camera.")
+parser.add_argument(
+    "--camera",
+    type=str,
+    choices=["azure", "zed"],
+    default="azure",
+    help="Camera to use: 'azure' or 'zed' (default: zed)",
+)
+args = parser.parse_args()
+camera = args.camera
 
 # initialize robot
 left_arm = Robot(namespace="")
@@ -49,14 +63,34 @@ rate = left_arm.node.create_rate(ctrl_freq)
 left_arm.move_to(pose=target_pose, speed=0.15)
 
 # Setup zed camera
-zed = sl.Camera()
-init_params = sl.InitParameters()
-init_params.sdk_verbose = 1
-init_params.camera_resolution = sl.RESOLUTION.AUTO
-init_params.camera_fps = 30
-zed.open(init_params)
-image = sl.Mat()
-runtime_params = sl.RuntimeParameters()
+if camera == "zed":
+    zed = sl.Camera()
+    init_params = sl.InitParameters()
+    init_params.sdk_verbose = 1
+    init_params.camera_resolution = sl.RESOLUTION.AUTO
+    init_params.camera_fps = 30
+    zed.open(init_params)
+    image = sl.Mat()
+    runtime_params = sl.RuntimeParameters()
+else:
+    print("Using Azure camera")
+    device = k4a.Device.open()
+    if device is None:
+        exit(-1)
+    device_config = k4a.DeviceConfiguration(
+        color_format=k4a.EImageFormat.COLOR_BGRA32,
+        color_resolution=k4a.EColorResolution.RES_1080P,
+        depth_mode=k4a.EDepthMode.WFOV_2X2BINNED,
+        camera_fps=k4a.EFramesPerSecond.FPS_15,
+        synchronized_images_only=True,
+        depth_delay_off_color_usec=0,
+        wired_sync_mode=k4a.EWiredSyncMode.STANDALONE,
+        subordinate_delay_off_master_usec=0,
+        disable_streaming_indicator=False)
+    status = device.start_cameras(device_config)
+    if status != k4a.EStatus.SUCCEEDED:
+        exit(-1)
+
 
 # data capture variables
 frame_count = 0
@@ -77,15 +111,26 @@ while t < max_time:
             p.orientation.as_quat()[2], p.orientation.as_quat()[3]]))
         
         # Take the image and save it
-        if zed.grab(runtime_params) == sl.ERROR_CODE.SUCCESS:
-            zed.retrieve_image(image, sl.VIEW.LEFT)
-            frame = image.get_data()
-            cv2.imwrite(f"{DATAPATH}/images/image_pose_{pose_count}.png", frame)
+        if camera == "zed":
+            if zed.grab(runtime_params) == sl.ERROR_CODE.SUCCESS:
+                zed.retrieve_image(image, sl.VIEW.LEFT)
+                frame = image.get_data()
+                cv2.imwrite(f"{DATAPATH}/images/image_pose_{pose_count}.png", frame)
+                print(f"Image Captured {pose_count}")
+                pose_count += 1
+            else:
+                print(f"ERROR: Failed to capture image {pose_count}")
+                pose_count += 1
+        else:
+            capture = device.get_capture(-1)
+            color_image = capture.color
+            color_image_data = color_image.data  # NumPy array (BGRA)
+            color_bgr = cv2.cvtColor(color_image_data, cv2.COLOR_BGRA2BGR)
+            cv2.imwrite(f"{DATAPATH}/images/image_pose_{pose_count}.png", color_bgr)
             print(f"Image Captured {pose_count}")
             pose_count += 1
-        else:
-            print(f"ERROR: Failed to capture image {pose_count}")
-            pose_count += 1
+            if status != k4a.EStatus.SUCCEEDED:
+                exit(-1)
 
         # input("Press Enter to continue...")
         
