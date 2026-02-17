@@ -3,6 +3,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 from calculate_base_to_cam import gripper2tag
+from azure_intrinsics import azure_intrinsics
+from apriltag_image import _camera_params_for
 
 # Tag positions and rotations
 def load_saved_transforms(transform_file:str, num_transforms=30):
@@ -61,11 +63,12 @@ def ground_truth_3d_plot(t_base2tag):
     ax.set_zlabel('Z axis')
     plt.show()
 
-def project_3d_to_2d(point_3d, K, T_base2cam, use_cv2=False):
+def project_3d_to_2d(point_3d, K, T_base2cam, use_cv2=True):
     """
     Project a 3D point from base frame to 2D image coordinates.
     T_base2cam is a transformation matrix of the camera frame in the base frame coordinates
     """
+    print(T_base2cam)
     # Transform point to camera frame
     if not use_cv2:
         point_base_homog = np.hstack([point_3d, 1.0])
@@ -110,7 +113,7 @@ def get_image_points(max_images, t_base2tag, K, T_base2cam):
 
 def project_2d_points_on_images(max_images, points_2d, DATAPATH):
     valid_projections = 0
-    for i in range(1, max_images + 1):
+    for i in range(0, max_images):
         img_path = f"{DATAPATH}/images/image_pose_{i}.png"
         img = cv2.imread(img_path)
         if img is None:
@@ -120,7 +123,7 @@ def project_2d_points_on_images(max_images, points_2d, DATAPATH):
         if i - 1 >= len(points_2d):
             print(f"Warning: No projection available for image {i}")
             continue
-        point_2d = points_2d[i - 1]
+        point_2d = points_2d[i]
         overlay = img.copy()
         h, w = img.shape[:2]
         print(f"Image {i}:")
@@ -151,12 +154,12 @@ def project_2d_points_on_images(max_images, points_2d, DATAPATH):
 
 DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 #Transform obtained form the analyze
-T_base2cam = np.load(f"{DATAPATH}/poses/cam2base_transform.npz")['arr_0']
+T_base2cam = np.load(f"{DATAPATH}/poses/base2cam_transform.npz")['arr_0']
 # print("T_base2cam:\n", T_base2cam["arr_0"])
-# T_base2cam = np.linalg.inv(T_base2cam)
 
 # camera_params = [716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656] # fx, fy, cx, cy
-camera_params = [716.5634765625, 716.5634765625, 655.4454345703125 , 395.7761535644531]
+# camera_params = [716.5634765625, 716.5634765625, 655.4454345703125 , 395.7761535644531]
+camera_params = _camera_params_for("azure")
 fx = camera_params[0]
 fy = camera_params[1]
 cx = camera_params[2]
@@ -167,7 +170,7 @@ K = np.array([[fx, 0, cx],
 max_images = 29
 
 # Load saved transforms
-t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/figure_eight_poses_1_28.npz")
+t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/figure_eight_poses.npz")
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
 
 # Plot the 3D positions of the tag locations

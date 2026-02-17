@@ -40,7 +40,7 @@ initial_rotation = np.pi/2 # rotation arounnd robot z axis (counterclockwise)
 
 left_arm.controller_switcher_client.switch_controller("cartesian_impedance_controller")
 left_arm.cartesian_controller_parameters_client.load_param_config(
-    file_path="config/control/default_cartesian_impedance.yaml"
+    file_path="/home/roahmlab/move_some_robots/crisp_env/crisp_py/config/control/default_cartesian_impedance.yaml"
 )
 
 # set initial target pose and orientation
@@ -79,7 +79,7 @@ else:
         exit(-1)
     device_config = k4a.DeviceConfiguration(
         color_format=k4a.EImageFormat.COLOR_BGRA32,
-        color_resolution=k4a.EColorResolution.RES_1080P,
+        color_resolution=k4a.EColorResolution.RES_720P,
         depth_mode=k4a.EDepthMode.WFOV_2X2BINNED,
         camera_fps=k4a.EFramesPerSecond.FPS_15,
         synchronized_images_only=True,
@@ -103,7 +103,7 @@ while t < max_time:
     
     if frame_count % 13 == 0:
         # Wait for arm to settle
-        time.sleep(1.0)
+        time.sleep(2.0)
         # Save the pose
         p = left_arm.end_effector_pose.copy()
         pose_list.append(np.array([p.position[0], p.position[1], p.position[2],
