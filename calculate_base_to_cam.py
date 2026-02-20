@@ -51,7 +51,7 @@ def _load_apriltag_transforms(max_images, DATAPATH, camera="azure"):
     detection_transforms = []
     count = 0
     for i in range(1, max_images + 1):
-        detections = apriltag_image([f"{DATAPATH}/images/image_pose_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11", camera=camera)
+        detections = apriltag_image([f"{DATAPATH}/images/calibration_image_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11", camera=camera)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
             detection_transforms.append(None)
@@ -140,7 +140,7 @@ def main():
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses(f"{DATAPATH}/poses/figure_eight_poses.npz", max_images)
+    positions, orientations = _load_figure_eight_poses(f"{DATAPATH}/poses/calibration_poses.npz", max_images)
 
     t_base2gripper = positions[0:max_images]
     r_base2gripper = orientations[0:max_images]

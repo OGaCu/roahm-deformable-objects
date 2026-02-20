@@ -25,7 +25,7 @@ def get_center_tag_transforms(t_base2gripper, r_base2gripper):
         t_base2gripper_mat[0:3, 0:3] = r
         t_base2gripper_mat[0:3, 3] = t
 
-        t_base2tag_mat = t_base2gripper_mat @ gripper2tag
+        t_base2tag_mat = t_base2gripper_mat# @ gripper2tag
         r_base2tag.append(t_base2tag_mat[0:3, 0:3])
         t_base2tag.append(t_base2tag_mat[0:3, 3])
     return t_base2tag, r_base2tag
@@ -114,7 +114,7 @@ def get_image_points(max_images, t_base2tag, K, T_base2cam):
 def project_2d_points_on_images(max_images, points_2d, DATAPATH):
     valid_projections = 0
     for i in range(0, max_images):
-        img_path = f"{DATAPATH}/images/image_pose_{i}.png"
+        img_path = f"{DATAPATH}/images/double_arm_image_{i}.png"
         img = cv2.imread(img_path)
         if img is None:
             print(f"Warning: Could not load {img_path}")
@@ -167,10 +167,11 @@ cy = camera_params[3]
 K = np.array([[fx, 0, cx],
               [0, fy, cy],
               [0, 0, 1]])
-max_images = 29
+max_images = 100
 
 # Load saved transforms
-t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/figure_eight_poses.npz")
+t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/left_arm_poses.npz", max_images)
+print(len(t_base2gripper), len(r_base2gripper))
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
 
 # Plot the 3D positions of the tag locations
