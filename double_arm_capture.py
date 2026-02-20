@@ -59,11 +59,14 @@ DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calib
 
 
 # initialize robot
-left_arm = Robot(namespace="")
+left_arm = Robot(namespace="left")
+right_arm = Robot(namespace="right")
 left_arm.wait_until_ready()
+right_arm.wait_until_ready()
 
 print("Going to home position...")
 left_arm.home()
+right_arm.home()
 
 # Setup Params
 
@@ -77,15 +80,25 @@ left_arm.cartesian_controller_parameters_client.set_parameters([
     ("task.error_clip.rx", 0.008), ("task.error_clip.ry", 0.008), ("task.error_clip.rz", 0.008),
 ])
 
+right_arm.controller_switcher_client.switch_controller("cartesian_impedance_controller")
+right_arm.cartesian_controller_parameters_client.load_param_config(
+    file_path="/home/roahmlab/move_some_robots/crisp_env/crisp_py/config/control/clipped_cartesian_impedance.yaml"
+)
+
+right_arm.cartesian_controller_parameters_client.set_parameters([
+    ("task.error_clip.x", 0.005), ("task.error_clip.y", 0.005), ("task.error_clip.z", 0.005),
+    ("task.error_clip.rx", 0.008), ("task.error_clip.ry", 0.008), ("task.error_clip.rz", 0.008),
+])
+
 # waypoint list
 
-waypoints = parse_task_poses(f"{DATAPATH}/test_traj.task")
+left_waypoints = parse_task_poses(f"{DATAPATH}/left_traj.task")
+right_waypoints = parse_task_poses(f"{DATAPATH}/right_traj.task")
 
 # set initial target pose and orientation
-print("Starting to draw a circle...")
-target_pose = left_arm.end_effector_pose.copy()
-
-
+print("Starting to capture...")
+left_target_pose = left_arm.end_effector_pose.copy()
+right_target_pose = right_arm.end_effector_pose.copy()
 
 # Setup zed camera
 if camera == "zed":
@@ -120,29 +133,39 @@ else:
 # data capture variables
 frame_count = 0
 pose_count = 0
-pose_list  = []
+left_pose_list  = []
+right_pose_list  = []
 
-target_pose.position = waypoints[0][0:3,3]
-target_pose.orientation = Rotation.from_matrix(waypoints[0][0:3, 0:3])
-waypoint_index = 0
+left_target_pose.position = left_waypoints[0][0:3,3]
+left_target_pose.orientation = Rotation.from_matrix(left_waypoints[0][0:3, 0:3])
+right_target_pose.position = right_waypoints[0][0:3,3]
+right_target_pose.orientation = Rotation.from_matrix(right_waypoints[0][0:3, 0:3])
+left_waypoint_index = 0
+right_waypoint_index = 0
 
-print("taget_pose_rotation:", target_pose)
-left_arm.move_to(pose=target_pose, speed=0.15)
+# print("taget_pose_rotation:", target_pose)
+left_arm.move_to(pose=left_target_pose, speed=0.15)
+right_arm.move_to(pose=right_target_pose, speed=0.15)
+
+# assert(len(left_waypoints) == len(right_waypoints))
 
 # main trajectory loop
 start_time = 0.0
-while waypoint_index < len(waypoints):
+while left_waypoint_index < len(left_waypoints) and right_waypoint_index < len(right_waypoints):
     end_time = time.time()
     print(f"Time taken: {1/(end_time - start_time)} Hz")
     start_time = time.time()
 
     if frame_count % 1 == 0:
         # Save the pose
-        p = left_arm.end_effector_pose.copy()
-        pose_list.append(np.array([p.position[0], p.position[1], p.position[2],
-            p.orientation.as_quat()[0], p.orientation.as_quat()[1],
-            p.orientation.as_quat()[2], p.orientation.as_quat()[3]]))
-        # print(p)
+        p_left = left_arm.end_effector_pose.copy()
+        left_pose_list.append(np.array([p_left.position[0], p_left.position[1], p_left.position[2],
+            p_left.orientation.as_quat()[0], p_left.orientation.as_quat()[1],
+            p_left.orientation.as_quat()[2], p_left.orientation.as_quat()[3]]))
+        p_right = right_arm.end_effector_pose.copy()
+        right_pose_list.append(np.array([p_right.position[0], p_right.position[1], p_right.position[2],
+            p_right.orientation.as_quat()[0], p_right.orientation.as_quat()[1],
+            p_right.orientation.as_quat()[2], p_right.orientation.as_quat()[3]]))
         # Take the image and save it
         if camera == "zed":
             if zed.grab(runtime_params) == sl.ERROR_CODE.SUCCESS:
@@ -159,13 +182,13 @@ while waypoint_index < len(waypoints):
             color_image = capture.color
             color_image_data = color_image.data  # NumPy array (BGRA)
             color_bgr = cv2.cvtColor(color_image_data, cv2.COLOR_BGRA2BGR)
-            cv2.imwrite(f"{DATAPATH}/images/single_arm_image_pose_{pose_count}.png", color_bgr)
+            cv2.imwrite(f"{DATAPATH}/images/double_arm_image_{pose_count}.png", color_bgr)
             # Save full RGB-D as npz (color BGR, depth raw uint16 in mm)
             depth_image = capture.depth
             save_kw = {"color": color_bgr}
             if depth_image is not None:
                 save_kw["depth"] = depth_image.data
-            np.savez(f"{DATAPATH}/images/single_arm_rgbd_pose_{pose_count}.npz", **save_kw)
+            np.savez(f"{DATAPATH}/images/double_arm_rgbd_{pose_count}.npz", **save_kw)
             print(f"Image Captured {pose_count}")
             pose_count += 1
             if status != k4a.EStatus.SUCCEEDED:
@@ -174,20 +197,30 @@ while waypoint_index < len(waypoints):
 
     frame_count += 1
     print(f"Current position: {left_arm.end_effector_pose.position}")
-    print(f"Target position: {target_pose.position}")
-    print(f"Difference: {sum(left_arm.end_effector_pose.position - target_pose.position)}")
-    if abs(sum(left_arm.end_effector_pose.position - target_pose.position)) < 0.05:
-        waypoint_index += 1
-        if(waypoint_index < len(waypoints)):
-            target_pose.position = waypoints[waypoint_index][0:3,3]
-            print(f"Waypoint {waypoint_index} reached")
-            target_pose.orientation = Rotation.from_matrix(waypoints[waypoint_index][0:3, 0:3])
+    print(f"Target position: {left_target_pose.position}")
+    print(f"Difference: {sum(left_arm.end_effector_pose.position - left_target_pose.position)}")
+    if abs(sum(left_arm.end_effector_pose.position - left_target_pose.position)) < 0.05:
+        left_waypoint_index += 1
+        if(left_waypoint_index < len(left_waypoints)):
+            left_target_pose.position = left_waypoints[left_waypoint_index][0:3,3]
+            print(f"Waypoint {left_waypoint_index} reached")
+            left_target_pose.orientation = Rotation.from_matrix(left_waypoints[left_waypoint_index][0:3, 0:3])
+
+    if abs(sum(right_arm.end_effector_pose.position - right_target_pose.position)) < 0.05:
+        right_waypoint_index += 1
+        if(right_waypoint_index < len(right_waypoints)):
+            right_target_pose.position = right_waypoints[right_waypoint_index][0:3,3]
+            print(f"Waypoint {right_waypoint_index} reached")
+            right_target_pose.orientation = Rotation.from_matrix(right_waypoints[right_waypoint_index][0:3, 0:3])
 
     # send target to controller
-    left_arm.set_target(pose=target_pose)
+    left_arm.set_target(pose=left_target_pose)
+    right_arm.set_target(pose=right_target_pose)
 
+assert(len(left_pose_list) == len(right_pose_list))
 # save all poses
-np.savez(f"{DATAPATH}/poses/single_arm_poses.npz", *pose_list)
+np.savez(f"{DATAPATH}/poses/left_arm_poses.npz", *left_pose_list)
+np.savez(f"{DATAPATH}/poses/right_arm_poses.npz", *right_pose_list)
 
 print("Waiting for robot to settle...")
 time.sleep(1.0)
@@ -196,4 +229,6 @@ print("Done drawing a circle!")
 
 print("return to home and shutdown")
 left_arm.home()
+right_arm.home()
 left_arm.shutdown()
+right_arm.shutdown()
