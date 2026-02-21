@@ -61,6 +61,7 @@ DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calib
 # initialize robot
 left_arm = Robot(namespace="left")
 right_arm = Robot(namespace="right")
+
 left_arm.wait_until_ready()
 right_arm.wait_until_ready()
 

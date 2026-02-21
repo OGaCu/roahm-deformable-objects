@@ -114,40 +114,41 @@ def get_image_points(max_images, t_base2tag, K, T_base2cam):
 def project_2d_points_on_images(max_images, points_2d, DATAPATH):
     valid_projections = 0
     for i in range(0, max_images):
-        img_path = f"{DATAPATH}/images/double_arm_image_{i}.png"
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Warning: Could not load {img_path}")
-            continue
-        # Project tag center
-        if i - 1 >= len(points_2d):
-            print(f"Warning: No projection available for image {i}")
-            continue
-        point_2d = points_2d[i]
-        overlay = img.copy()
-        h, w = img.shape[:2]
-        print(f"Image {i}:")
+        if i%1 == 0:
+            img_path = f"{DATAPATH}/images/double_arm_image_{i}.png"
+            img = cv2.imread(img_path)
+            if img is None:
+                print(f"Warning: Could not load {img_path}")
+                continue
+            # Project tag center
+            if i - 1 >= len(points_2d):
+                print(f"Warning: No projection available for image {i}")
+                continue
+            point_2d = points_2d[i]
+            overlay = img.copy()
+            h, w = img.shape[:2]
+            print(f"Image {i}:")
 
-        x_f, y_f = point_2d
-        x = int(round(float(x_f)))
-        y = int(round(float(y_f)))
-        print(f"  ✓ Projected to 2D: ({x}, {y})")
-        # Check if within image bounds
-        if 0 <= x < w and 0 <= y < h:
-            cv2.circle(overlay, (x, y), 8, (0, 255, 255), -1)      # Cyan filled circle
-            cv2.circle(overlay, (x, y), 8, (255, 0, 0), 2)         # Blue outline
-            cv2.putText(overlay, f"({x}, {y})", (x + 10, y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            print(f"Point is WITHIN image bounds")
-            valid_projections += 1
-        else:
-            print(f"Projected point ({x}, {y}) is OUTSIDE image bounds ({w}x{h})")
-        # Display the image
-        cv2.imshow(f"Image {i} - Projected Tag Center", overlay)
-        key = cv2.waitKey(500)  # 500ms per image
-        if key == ord('q'):
-            print("\nUser interrupted.")
-            break
+            x_f, y_f = point_2d
+            x = int(round(float(x_f)))
+            y = int(round(float(y_f)))
+            print(f"  ✓ Projected to 2D: ({x}, {y})")
+            # Check if within image bounds
+            if 0 <= x < w and 0 <= y < h:
+                cv2.circle(overlay, (x, y), 8, (0, 255, 255), -1)      # Cyan filled circle
+                cv2.circle(overlay, (x, y), 8, (255, 0, 0), 2)         # Blue outline
+                cv2.putText(overlay, f"({x}, {y})", (x + 10, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                print(f"Point is WITHIN image bounds")
+                valid_projections += 1
+            else:
+                print(f"Projected point ({x}, {y}) is OUTSIDE image bounds ({w}x{h})")
+            # Display the image
+            cv2.imshow(f"Image {i} - Projected Tag Center", overlay)
+            key = cv2.waitKey(500)  # 500ms per image
+            if key == ord('q'):
+                print("\nUser interrupted.")
+                break
     cv2.destroyAllWindows()
     print(f"\n=== Dry Run Complete ===")
     print(f"Valid projections: {valid_projections}/{max_images}\n")
@@ -155,7 +156,7 @@ def project_2d_points_on_images(max_images, points_2d, DATAPATH):
 DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 #Transform obtained form the analyze
 T_base2cam = np.load(f"{DATAPATH}/poses/base2cam_transform.npz")['arr_0']
-# print("T_base2cam:\n", T_base2cam["arr_0"])
+print("T_base2cam:\n", T_base2cam)
 
 # camera_params = [716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656] # fx, fy, cx, cy
 # camera_params = [716.5634765625, 716.5634765625, 655.4454345703125 , 395.7761535644531]
@@ -167,12 +168,41 @@ cy = camera_params[3]
 K = np.array([[fx, 0, cx],
               [0, fy, cy],
               [0, 0, 1]])
-max_images = 100
+max_images = 179
+
+initial_rotation = np.pi
+turn_rotation = np.array([  [np.cos(initial_rotation), -1 * np.sin(initial_rotation), 0.0],
+                                [np.sin(initial_rotation), np.cos(initial_rotation), 0.0],
+                                [0.0, 0.0, 1.0]])
+
+right_to_left_transform = np.eye(4)
+right_to_left_transform[0:3, 0:3] = turn_rotation
+right_to_left_transform[0:3, 3] = np.array([1.258, 0.0, 0.0])
+print("right_to_left_transform:\n", right_to_left_transform)
 
 # Load saved transforms
 t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/left_arm_poses.npz", max_images)
 print(len(t_base2gripper), len(r_base2gripper))
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
+
+# Transform base2tag from right arm frame to left arm frame
+t_base2tag_left = []
+r_base2tag_left = []
+for r, t in zip(r_base2tag, t_base2tag):
+    base2tag_mat = np.eye(4)
+    base2tag_mat[0:3, 0:3] = r
+    base2tag_mat[0:3, 3] = t
+    
+    # Apply right_to_left_transform
+    base2tag_left_mat = right_to_left_transform @ base2tag_mat
+    
+    r_base2tag_left.append(base2tag_left_mat[0:3, 0:3])
+    t_base2tag_left.append(base2tag_left_mat[0:3, 3])
+
+# Update the original lists
+t_base2tag = t_base2tag_left
+r_base2tag = r_base2tag_left
+
 
 # Plot the 3D positions of the tag locations
 ground_truth_3d_plot(t_base2tag)

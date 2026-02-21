@@ -50,8 +50,8 @@ def _se3_exp(xi, eps=1e-9):
 def _load_apriltag_transforms(max_images, DATAPATH, camera="azure"):
     detection_transforms = []
     count = 0
-    for i in range(1, max_images + 1):
-        detections = apriltag_image([f"{DATAPATH}/images/calibration_image_{i}.png"], output_images=True, display_images=True, tag_size=0.10, tag_family="tag36h11", camera=camera)
+    for i in range(max_images):
+        detections = apriltag_image([f"{DATAPATH}/images/calibration_image_{i}.png"], output_images=True, display_images=True, tag_size=0.095, tag_family="tag36h11", camera=camera)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
             detection_transforms.append(None)
@@ -104,7 +104,7 @@ def _invert_rt_pairs(r_list, t_list):
     return r_out, t_out
 
 
-def _mean_se3(transforms, max_iters=20, tol=1e-9):
+def _mean_se3(transforms, max_iters=100, tol=1e-9):
     t_mean = transforms[0]
     for _ in range(max_iters):
         xi_sum = np.zeros(6)
@@ -118,8 +118,17 @@ def _mean_se3(transforms, max_iters=20, tol=1e-9):
 
 gripper2tag = np.array(    [[0, 0, -1, 0.02],
                             [0, -1, 0, 0],
-                            [-1, 0, 0, 0.08],
+                            [-1, 0, 0, 0.088],
                             [0, 0, 0, 1]])
+# gripper2tag = np.array(    [[0, 0, -1, 0],
+#                             [0, -1, 0, 0],
+#                             [-1, 0, 0, 0],
+#                             [0, 0, 0, 1]])
+# gripper2tag_2 = np.array(    [[1, 0, 0, -0.08],
+#                             [0, 1, 0, 0],
+#                             [0, 0, 1, -0.02],
+#                             [0, 0, 0, 1]])
+# print("gripperthing: ", gripper2tag @ gripper2tag_2)
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate base-to-camera transform from poses and AprilTag detections.")
@@ -133,7 +142,7 @@ def main():
     args = parser.parse_args()
     camera = args.camera
 
-    max_images = 30
+    max_images = 58
     DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 
     detection_transforms = _load_apriltag_transforms(max_images, DATAPATH, camera=camera)

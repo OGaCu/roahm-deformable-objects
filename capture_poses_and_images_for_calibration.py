@@ -101,7 +101,7 @@ DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calib
 # main trajectory loop
 while t < max_time:
     
-    if frame_count % 13 == 0:
+    if frame_count % 7 == 0:
         # Wait for arm to settle
         time.sleep(2.0)
         # Save the pose
