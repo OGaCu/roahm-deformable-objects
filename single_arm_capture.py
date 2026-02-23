@@ -11,7 +11,7 @@ import pyzed.sl as sl
 import cv2
 import time
 import k4a
-import time
+from helper import densify_waypoints
 
 
 
@@ -43,7 +43,6 @@ def parse_task_poses(task_path: str | Path, save_npz: str | Path | None = None) 
     if save_npz is not None:
         np.savez(save_npz, *transforms)
     return transforms
-
 
 parser = argparse.ArgumentParser(description="Capture poses and images with specified camera.")
 parser.add_argument(
@@ -79,7 +78,12 @@ left_arm.cartesian_controller_parameters_client.set_parameters([
 
 # waypoint list
 
-waypoints = parse_task_poses(f"{DATAPATH}/test_traj.task")
+raw_waypoints = parse_task_poses(f"{DATAPATH}/test_traj.task")
+MAX_WAYPOINT_STEP_M = 0.03
+waypoints = densify_waypoints(raw_waypoints, max_translation_step=MAX_WAYPOINT_STEP_M)
+
+if not waypoints:
+    raise RuntimeError(f"No valid waypoints found in {DATAPATH}/test_traj.task")
 
 # set initial target pose and orientation
 print("Starting to draw a circle...")

@@ -11,7 +11,7 @@ import pyzed.sl as sl
 import cv2
 import time
 import k4a
-import time
+from helper import densify_waypoints
 
 
 
@@ -93,8 +93,16 @@ right_arm.cartesian_controller_parameters_client.set_parameters([
 
 # waypoint list
 
-left_waypoints = parse_task_poses(f"{DATAPATH}/left_traj.task")
-right_waypoints = parse_task_poses(f"{DATAPATH}/right_traj.task")
+left_raw_waypoints = parse_task_poses(f"{DATAPATH}/left_traj.task")
+right_raw_waypoints = parse_task_poses(f"{DATAPATH}/right_traj.task")
+MAX_WAYPOINT_STEP_M = 0.03
+left_waypoints = densify_waypoints(left_raw_waypoints, max_translation_step=MAX_WAYPOINT_STEP_M)
+right_waypoints = densify_waypoints(right_raw_waypoints, max_translation_step=MAX_WAYPOINT_STEP_M)
+
+if not left_waypoints:
+    raise RuntimeError(f"No valid waypoints found in {DATAPATH}/left_traj.task")
+if not right_waypoints:
+    raise RuntimeError(f"No valid waypoints found in {DATAPATH}/right_traj.task")
 
 # set initial target pose and orientation
 print("Starting to capture...")
