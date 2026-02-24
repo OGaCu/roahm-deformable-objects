@@ -134,7 +134,7 @@ def _streaming_capture_loop(
                 p_first = left_arm.end_effector_pose.copy()
                 capture = azure_device.get_capture(-1)
                 p_second = left_arm.end_effector_pose.copy()
-                p_avg = weighted_average_transforms(p_first, p_second, 0.7, 0.3)
+                p_avg = weighted_average_transforms(p_first, p_second, 0.5, 0.5)
                 pose_vec = np.array([
                     p_avg.position[0], p_avg.position[1], p_avg.position[2],
                     p_avg.as_quat()[0], p_avg.as_quat()[1],
