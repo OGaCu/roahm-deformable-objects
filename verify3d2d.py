@@ -1,18 +1,24 @@
+import argparse
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial.transform import Rotation
-import matplotlib.pyplot as plt
 from calculate_base_to_cam import gripper2tag
 from azure_intrinsics import azure_intrinsics
 from apriltag_image import _camera_params_for
 
 # Tag positions and rotations
-def load_saved_transforms(transform_file:str, num_transforms=30):
+def load_saved_transforms(transform_file: str, num_transforms: int | None = None):
+    """Load base-to-gripper poses from npz (arr_0, arr_1, ...). If num_transforms is None, load all."""
     np_info = np.load(transform_file)
-    translations = [] # tag in the base frame
-    rotations = [] # rotations in the base frame
-    for i in range(num_transforms):
-        np_stuff = np_info["arr_"+str(i)]
+    arr_keys = [k for k in np_info.files if k.startswith("arr_")]
+    arr_keys.sort(key=lambda k: int(k.split("_")[1]))
+    if num_transforms is not None:
+        arr_keys = arr_keys[:num_transforms]
+    translations = []
+    rotations = []
+    for k in arr_keys:
+        np_stuff = np_info[k]
         translations.append(np_stuff[0:3])
         rotations.append(Rotation.from_quat(np_stuff[3:]).as_matrix())
     return translations, rotations
@@ -31,45 +37,44 @@ def get_center_tag_transforms(t_base2gripper, r_base2gripper):
     return t_base2tag, r_base2tag
 
 
-# From prior we know the camera is roughly looking in the negative x axis of the base frame
-def ground_truth_3d_plot(t_base2tag):
-    """
-    Plots the 3d positions of the tag locations
-    """
-    from mpl_toolkits.mplot3d import Axes3D
+def plot_3d_trajectory(t_base2tag):
+    """Show 3D trajectory in an interactive window: green tail, orange current (last) position."""
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    xs = np.array([t[0] for t in t_base2tag])
+    ys = np.array([t[1] for t in t_base2tag])
+    zs = np.array([t[2] for t in t_base2tag])
     fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    # Plot tag positions
-    xs = [t[0] for t in t_base2tag]
-    ys = [t[1] for t in t_base2tag]
-    zs = [t[2] for t in t_base2tag]
-    ax.scatter(xs, ys, zs, c='r', marker='o')
-
-    all_x = xs 
-    all_y = ys
-    all_z = zs 
-    x_min, x_max = min(all_x), max(all_x)
-    y_min, y_max = min(all_y), max(all_y)
-    z_min, z_max = min(all_z), max(all_z)
-    max_range = max(x_max - x_min, y_max - y_min, z_max - z_min)
+    ax = fig.add_subplot(111, projection="3d")
+    # Trajectory line and tail points in green
+    ax.plot(xs, ys, zs, color="green", alpha=0.7, linewidth=1)
+    ax.scatter(xs, ys, zs, c="green", s=8, alpha=0.8)
+    # Current (last) position in orange
+    if len(xs) > 0:
+        ax.scatter(xs[-1], ys[-1], zs[-1], c="orange", s=120, edgecolors="none", zorder=5)
+    all_x, all_y, all_z = xs, ys, zs
+    x_min, x_max = all_x.min(), all_x.max()
+    y_min, y_max = all_y.min(), all_y.max()
+    z_min, z_max = all_z.min(), all_z.max()
+    max_range = max(x_max - x_min, y_max - y_min, z_max - z_min) or 0.1
     mid_x = (x_min + x_max) / 2.0
     mid_y = (y_min + y_max) / 2.0
     mid_z = (z_min + z_max) / 2.0
     ax.set_xlim(mid_x - max_range / 2.0, mid_x + max_range / 2.0)
     ax.set_ylim(mid_y - max_range / 2.0, mid_y + max_range / 2.0)
     ax.set_zlim(mid_z - max_range / 2.0, mid_z + max_range / 2.0)
-    ax.set_xlabel('X axis')
-    ax.set_ylabel('Y axis')
-    ax.set_zlabel('Z axis')
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Z (m)")
+    ax.set_title("3D trajectory (green=path, orange=current)")
+    plt.tight_layout()
     plt.show()
 
 def project_3d_to_2d(point_3d, K, T_base2cam, use_cv2=True):
     """
     Project a 3D point from base frame to 2D image coordinates.
-    T_base2cam is a transformation matrix of the camera frame in the base frame coordinates
+    T_base2cam is a transformation matrix of the camera frame in the base frame coordinates.
+    Returns (x, y) or None if behind camera.
     """
-    print(T_base2cam)
-    # Transform point to camera frame
     if not use_cv2:
         point_base_homog = np.hstack([point_3d, 1.0])
         point_cam = (T_base2cam @ point_base_homog)[:3]
@@ -81,108 +86,107 @@ def project_3d_to_2d(point_3d, K, T_base2cam, use_cv2=True):
         point_img_homog = K @ point_cam
         point_2d = point_img_homog[:2] / point_img_homog[2]
     else:
+        point_base_homog = np.hstack([np.asarray(point_3d).reshape(3), 1.0])
+        point_cam = (T_base2cam @ point_base_homog)[:3]
+        if point_cam[2] <= 0:
+            return None
         point_3d = point_3d.reshape(1, 1, 3)
         r_vec, _ = cv2.Rodrigues(T_base2cam[:3, :3])
         t_vec = T_base2cam[:3, 3]
         point_2d, _ = cv2.projectPoints(point_3d, r_vec, t_vec, K, distCoeffs=None)
-    return point_2d.reshape(1, 1, 2)
+        return point_2d.reshape(2)
 
 
-def plot_2d_points(points_2d):
-    colors = np.linspace(0.0, 1.0, len(points_2d))
-    plt.figure()
-    plt.scatter(points_2d[:, 0], points_2d[:, 1], c=colors, cmap='viridis')
-    plt.colorbar(label='iteration')
-    plt.xlabel('u (px)')
-    plt.ylabel('v (px)')
-    plt.title('Projected 2D points by iteration')
-    plt.gca().invert_yaxis()
-    plt.show()
-
-def get_image_points(max_images, t_base2tag, K, T_base2cam):
+def get_all_2d_points(t_base2tag, K, T_base2cam):
+    """One 2D point per pose; None if behind camera. Same length as t_base2tag."""
     points_2d = []
-    for i in range(max_images):
+    for i in range(len(t_base2tag)):
         result = project_3d_to_2d(t_base2tag[i], K, T_base2cam, use_cv2=True)
-        if result is not None:
-            points_2d.append(result)
-    if len(points_2d) == 0:
-        print("No valid projections!")
-        exit()
-    points_2d = np.array([p.reshape(2) for p in points_2d])
+        points_2d.append(result)
     return points_2d
 
-def project_2d_points_on_images(max_images, points_2d, DATAPATH):
-    valid_projections = 0
-    for i in range(0, max_images):
-        if i%1 == 0:
-            img_path = f"{DATAPATH}/images/double_arm_image_{i}.png"
-            img = cv2.imread(img_path)
-            if img is None:
-                print(f"Warning: Could not load {img_path}")
-                continue
-            # Project tag center
-            if i - 1 >= len(points_2d):
-                print(f"Warning: No projection available for image {i}")
-                continue
-            point_2d = points_2d[i]
-            overlay = img.copy()
-            h, w = img.shape[:2]
-            print(f"Image {i}:")
 
-            x_f, y_f = point_2d
-            x = int(round(float(x_f)))
-            y = int(round(float(y_f)))
-            print(f"  ✓ Projected to 2D: ({x}, {y})")
-            # Check if within image bounds
+def write_trajectory_video(
+    datapath: str,
+    points_2d: list,
+    tail_length: int,
+    downsample: int,
+    output_path: str,
+    fps: float = 10.0,
+):
+    """
+    Write an .mp4 where each frame is the camera image with the trajectory tail overlaid.
+    Tail = green small points; current position = orange. Frame i uses image at original index i * downsample.
+    """
+    n_frames = len(points_2d)
+    if n_frames == 0:
+        print("No frames to write.")
+        return
+    first_img_path = f"{datapath}/images/single_arm_image_pose_0.png"
+    first_img = cv2.imread(first_img_path)
+    if first_img is None:
+        print(f"Cannot load {first_img_path}; aborting video.")
+        return
+    h, w = first_img.shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+    if not writer.isOpened():
+        print(f"Failed to open video writer for {output_path}")
+        return
+    green = (0, 255, 0)   # BGR tail
+    orange = (0, 165, 255)  # BGR current position
+    radius_tail = 2
+    radius_current = 4
+    thickness = -1
+
+    for i in range(n_frames):
+        orig_idx = i * downsample
+        img_path = f"{datapath}/images/single_arm_image_pose_{orig_idx}.png"
+        img = cv2.imread(img_path)
+        if img is None:
+            img = np.zeros((h, w, 3), dtype=np.uint8)
+            img[:] = (40, 40, 40)
+        if img.shape[0] != h or img.shape[1] != w:
+            img = cv2.resize(img, (w, h))
+        overlay = img.copy()
+        start_idx = max(0, i - tail_length + 1)
+        # Tail: green points (all in tail including current, then overwrite current with orange)
+        for j in range(start_idx, i + 1):
+            pt = points_2d[j]
+            if pt is None:
+                continue
+            x = int(round(float(pt[0])))
+            y = int(round(float(pt[1])))
             if 0 <= x < w and 0 <= y < h:
-                cv2.circle(overlay, (x, y), 8, (0, 255, 255), -1)      # Cyan filled circle
-                cv2.circle(overlay, (x, y), 8, (255, 0, 0), 2)         # Blue outline
-                cv2.putText(overlay, f"({x}, {y})", (x + 10, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                print(f"Point is WITHIN image bounds")
-                valid_projections += 1
-            else:
-                print(f"Projected point ({x}, {y}) is OUTSIDE image bounds ({w}x{h})")
-            # Display the image
-            cv2.imshow(f"Image {i} - Projected Tag Center", overlay)
-            key = cv2.waitKey(500)  # 500ms per image
-            if key == ord('q'):
-                print("\nUser interrupted.")
-                break
-    cv2.destroyAllWindows()
-    print(f"\n=== Dry Run Complete ===")
-    print(f"Valid projections: {valid_projections}/{max_images}\n")
+                if j == i:
+                    cv2.circle(overlay, (x, y), radius_current, orange, thickness)
+                else:
+                    cv2.circle(overlay, (x, y), radius_tail, green, thickness)
+        writer.write(overlay)
+    writer.release()
+    print(f"Saved trajectory video: {output_path} ({n_frames} frames)")
+
+parser = argparse.ArgumentParser(description="Verify hand-eye calibration: project EE trajectory to 2D and save as video.")
+parser.add_argument("--downsample", type=int, default=1, help="Use every Nth frame (default: 1 = no downsample)")
+parser.add_argument("--tail-length", type=int, default=60, help="Trajectory tail length in frames (default: 60)")
+parser.add_argument("--output", type=str, default="traj_2d_verify.mp4", help="Output video path (default: traj_2d_verify.mp4)")
+parser.add_argument("--fps", type=float, default=30.0, help="Output video FPS (default: 30)")
+args = parser.parse_args()
 
 DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
-#Transform obtained form the analyze
-T_base2cam = np.load(f"{DATAPATH}/poses/base2cam_transform.npz")['arr_0']
+
+T_base2cam = np.load(f"{DATAPATH}/poses/base2cam_transform.npz")["arr_0"]
 print("T_base2cam:\n", T_base2cam)
 
-# camera_params = [716.3119506835938, 716.3119506835938, 655.386962890625, 397.7469787597656] # fx, fy, cx, cy
-# camera_params = [716.5634765625, 716.5634765625, 655.4454345703125 , 395.7761535644531]
 camera_params = _camera_params_for("azure")
-fx = camera_params[0]
-fy = camera_params[1]
-cx = camera_params[2]
-cy = camera_params[3]
-K = np.array([[fx, 0, cx],
-              [0, fy, cy],
-              [0, 0, 1]])
-max_images = 179
-
-initial_rotation = np.pi
-turn_rotation = np.array([  [np.cos(initial_rotation), -1 * np.sin(initial_rotation), 0.0],
-                                [np.sin(initial_rotation), np.cos(initial_rotation), 0.0],
-                                [0.0, 0.0, 1.0]])
+fx, fy = camera_params[0], camera_params[1]
+cx, cy = camera_params[2], camera_params[3]
+K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
 
 right_to_left_transform = np.eye(4)
-right_to_left_transform[0:3, 0:3] = turn_rotation
-right_to_left_transform[0:3, 3] = np.array([1.258, 0.0, 0.0])
-print("right_to_left_transform:\n", right_to_left_transform)
 
-# Load saved transforms
-t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/left_arm_poses.npz", max_images)
-print(len(t_base2gripper), len(r_base2gripper))
+# Load all poses (no max)
+t_base2gripper, r_base2gripper = load_saved_transforms(f"{DATAPATH}/poses/single_arm_poses.npz")
 t_base2tag, r_base2tag = get_center_tag_transforms(t_base2gripper, r_base2gripper)
 
 # Transform base2tag from right arm frame to left arm frame
@@ -192,23 +196,34 @@ for r, t in zip(r_base2tag, t_base2tag):
     base2tag_mat = np.eye(4)
     base2tag_mat[0:3, 0:3] = r
     base2tag_mat[0:3, 3] = t
-    
-    # Apply right_to_left_transform
     base2tag_left_mat = right_to_left_transform @ base2tag_mat
-    
     r_base2tag_left.append(base2tag_left_mat[0:3, 0:3])
     t_base2tag_left.append(base2tag_left_mat[0:3, 3])
-
-# Update the original lists
 t_base2tag = t_base2tag_left
-r_base2tag = r_base2tag_left
 
+# Downsample: use every Nth frame
+downsample = max(1, args.downsample)
+t_base2tag_ds = t_base2tag[::downsample]
+print(f"Using {len(t_base2tag_ds)} frames (downsample={downsample}, total poses={len(t_base2tag)})")
 
-# Plot the 3D positions of the tag locations
-ground_truth_3d_plot(t_base2tag)
+# 2D projections for downsampled frames
+points_2d = get_all_2d_points(t_base2tag_ds, K, T_base2cam)
+valid = sum(1 for p in points_2d if p is not None)
+print(f"Valid 2D projections: {valid}/{len(points_2d)}")
 
-# Get and plot 2d projections
-points_2d = get_image_points(max_images, t_base2tag, K, T_base2cam)
-plot_2d_points(points_2d)
+# Video: camera image as background, green tail overlay (small points, no border)
+out_path = args.output if args.output.endswith(".mp4") else f"{args.output}.mp4"
+if not out_path.startswith("/") and "/" not in out_path:
+    out_path = f"{DATAPATH}/{out_path}"
+write_trajectory_video(
+    DATAPATH,
+    points_2d,
+    tail_length=args.tail_length,
+    downsample=downsample,
+    output_path=out_path,
+    fps=args.fps,
+)
 
-project_2d_points_on_images(max_images, points_2d, DATAPATH)
+# Show 3D trajectory in interactive window (green=path, orange=current)
+print("Opening 3D trajectory window (close to exit)...")
+plot_3d_trajectory(t_base2tag_ds)

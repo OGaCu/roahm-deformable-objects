@@ -1,7 +1,25 @@
-"""Moves the robot arm in a figure eight pattern and captures images of the AprilTag."""
+"""Moves the robot arm along a trajectory and streams (camera image, EE pose) pairs.
+
+=== High-level flow ===
+1. Trajectory is predefined: waypoints from a .task file (joint angles) or cartesian poses.
+   - Joint mode: waypoints have no inherent "fps"; the robot interpolates over time_to_goal per segment.
+   - Cartesian mode: the main loop sends set_target at ~50 Hz; the robot follows continuously.
+2. A separate streaming thread runs at --stream-hz (default 10): each tick it captures one image and
+   reads the current EE pose, then saves the pair. So you get (image, pose) pairs at the stream rate.
+3. Trajectory "fps" and stream rate are independent: the trajectory is defined by waypoints and
+   controller timing; the stream rate is how often we sample (image, pose). Frames and poses are
+   buffered in RAM during the run; all saves to disk happen after motion and streaming finish, so
+   actual capture rate can reach camera FPS (e.g. 30 fps) without disk I/O as a bottleneck.
+
+=== Order of pose vs camera capture (per stream tick) ===
+- Azure: pose_before → get_capture() [image acquired] → pose_after → we store average(pose_before, pose_after)
+  and the image. So the stored pose approximates the EE pose at capture time.
+- Zed: grab() [image acquired] → then read EE pose. So the stored pose is the pose *after* the frame.
+"""
 
 import argparse
 import json
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +29,7 @@ import pyzed.sl as sl
 import cv2
 import time
 import k4a
-from helper import densify_waypoints
+from helper import densify_waypoints, move_to_nonblocking, weighted_average_transforms, PoseSE3
 
 
 
@@ -44,6 +62,100 @@ def parse_task_poses(task_path: str | Path, save_npz: str | Path | None = None) 
         np.savez(save_npz, *transforms)
     return transforms
 
+
+def parse_task_joints(task_path: str | Path) -> list[np.ndarray]:
+    """Parse a .task file and extract joint angles for each waypoint.
+
+    The .task file is JSON from a Franka/teaching workflow; joint angles are under
+    parameter.parameterized_poses[].pose_with_joint_angles.joint_angles (7 floats for Franka).
+
+    Args:
+        task_path: Path to the .task file.
+
+    Returns:
+        List of 1D numpy arrays of joint positions (radians), one per waypoint.
+    """
+    task_path = Path(task_path)
+    with open(task_path, "r") as f:
+        data = json.load(f)
+    parameterized = data.get("parameter", {}).get("parameterized_poses", [])
+    joint_configs = []
+    for item in parameterized:
+        pwja = item.get("pose_with_joint_angles") or item
+        q = pwja.get("joint_angles")
+        if q is None:
+            continue
+        joint_configs.append(np.array(q, dtype=np.float64))
+    return joint_configs
+
+
+def _streaming_capture_loop(
+    capture_active: threading.Event,
+    left_arm,
+    camera: str,
+    zed_cam,
+    zed_image,
+    zed_runtime_params,
+    azure_device,
+    azure_transformation,
+    pose_list: list,
+    frame_list: list,
+    lock: threading.Lock,
+    rate_hz: float,
+) -> None:
+    """
+    Run at target rate_hz: each tick = one (image, EE pose) pair appended to lists. No disk I/O
+    during the loop so rate is limited only by camera FPS and get_capture(); saves happen after the run.
+    Order per tick:
+      - Zed:   grab image → retrieve → read EE pose → append (frame, pose).
+      - Azure: read EE pose (before) → get_capture() → read EE pose (after) → average pose →
+               depth_image_to_color_camera() → append (color_bgr, depth_aligned, pose).
+    """
+    period = 1.0 / rate_hz
+    while capture_active.is_set():
+        t0 = time.time()
+        try:
+            if camera == "zed":
+                if zed_cam.grab(zed_runtime_params) != sl.ERROR_CODE.SUCCESS:
+                    time.sleep(period)
+                    continue
+                zed_cam.retrieve_image(zed_image, sl.VIEW.LEFT)
+                frame = zed_image.get_data().copy()  # copy so next grab doesn't overwrite
+                p = left_arm.end_effector_pose
+                pose_vec = np.array([
+                    p.position[0], p.position[1], p.position[2],
+                    p.orientation.as_quat()[0], p.orientation.as_quat()[1],
+                    p.orientation.as_quat()[2], p.orientation.as_quat()[3],
+                ])
+                with lock:
+                    frame_list.append({"color": frame, "depth": None})
+                    pose_list.append(pose_vec)
+            else:
+                p_first = left_arm.end_effector_pose.copy()
+                capture = azure_device.get_capture(-1)
+                p_second = left_arm.end_effector_pose.copy()
+                p_avg = weighted_average_transforms(p_first, p_second, 0.7, 0.3)
+                pose_vec = np.array([
+                    p_avg.position[0], p_avg.position[1], p_avg.position[2],
+                    p_avg.as_quat()[0], p_avg.as_quat()[1],
+                    p_avg.as_quat()[2], p_avg.as_quat()[3],
+                ])
+                color_bgr = cv2.cvtColor(capture.color.data, cv2.COLOR_BGRA2BGR).copy()
+                # Depth transformed to color camera (same resolution as color, pixel-aligned)
+                if capture.depth is not None and azure_transformation is not None:
+                    depth_color_img = azure_transformation.depth_image_to_color_camera(capture.depth)
+                    depth_data = depth_color_img.data.copy()  # (H, W) uint16, same H,W as color
+                else:
+                    depth_data = None
+                with lock:
+                    frame_list.append({"color": color_bgr, "depth": depth_data})
+                    pose_list.append(pose_vec)
+        except Exception as e:
+            print(f"Streaming capture error: {e}")
+        elapsed = time.time() - t0
+        time.sleep(max(0.0, period - elapsed))
+
+
 parser = argparse.ArgumentParser(description="Capture poses and images with specified camera.")
 parser.add_argument(
     "--camera",
@@ -52,9 +164,30 @@ parser.add_argument(
     default="azure",
     help="Camera to use: 'azure' or 'zed' (default: zed)",
 )
+parser.add_argument(
+    "--trajectory",
+    type=str,
+    choices=["cartesian", "joint"],
+    default="cartesian",
+    help="Use cartesian waypoints (set_target) or joint waypoints from .task (joint_trajectory_controller)",
+)
+parser.add_argument(
+    "--task",
+    type=str,
+    default=None,
+    help="Path to .task file for waypoints (default: DATAPATH/right_traj.task for joint, right_traj_2.task for cartesian)",
+)
+parser.add_argument(
+    "--stream-hz",
+    type=float,
+    default=30.0,
+    help="Target streaming rate in Hz (image + EE pose per tick). For 30 fps use 30 and ensure Azure camera_fps=FPS_30; actual rate limited by camera, get_capture, and disk I/O.",
+)
 args = parser.parse_args()
 camera = args.camera
+trajectory_mode = args.trajectory
 DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
+TASK_PATH = args.task or (f"{DATAPATH}/right_traj.task" if trajectory_mode == "joint" else f"{DATAPATH}/right_traj_2.task")
 
 
 # initialize robot
@@ -64,34 +197,39 @@ left_arm.wait_until_ready()
 print("Going to home position...")
 left_arm.home()
 
-# Setup Params
+# Setup Params and waypoints
+if trajectory_mode == "joint":
+    joint_waypoints = parse_task_joints(TASK_PATH)
+    if not joint_waypoints:
+        raise RuntimeError(f"No joint waypoints found in {TASK_PATH}")
+    print(f"Loaded {len(joint_waypoints)} joint waypoints from {TASK_PATH}")
+    left_arm.controller_switcher_client.switch_controller("joint_trajectory_controller")
+else:
+    # move_to() and set_target(pose) need cartesian_impedance_controller
+    left_arm.controller_switcher_client.switch_controller("cartesian_impedance_controller")
+    left_arm.cartesian_controller_parameters_client.load_param_config(
+        file_path="/home/roahmlab/move_some_robots/crisp_env/crisp_py/config/control/clipped_cartesian_impedance.yaml"
+    )
+    left_arm.cartesian_controller_parameters_client.set_parameters([
+        ("task.error_clip.x", 0.005), ("task.error_clip.y", 0.005), ("task.error_clip.z", 0.005),
+        ("task.error_clip.rx", 0.008), ("task.error_clip.ry", 0.008), ("task.error_clip.rz", 0.008),
+    ])
+    raw_waypoints = parse_task_poses(TASK_PATH)
+    MAX_WAYPOINT_STEP_M = 0.15
+    waypoints = densify_waypoints(raw_waypoints, max_translation_step=MAX_WAYPOINT_STEP_M)
+    print("len(waypoints): ", len(waypoints))
+    if not waypoints:
+        raise RuntimeError(f"No valid waypoints found in {TASK_PATH}")
+    target_pose = left_arm.end_effector_pose.copy()
+    target_pose.position = waypoints[0][0:3, 3]
+    target_pose.orientation = Rotation.from_matrix(waypoints[0][0:3, 0:3])
+    waypoint_index = 0
 
-left_arm.controller_switcher_client.switch_controller("cartesian_impedance_controller")
-left_arm.cartesian_controller_parameters_client.load_param_config(
-    file_path="/home/roahmlab/move_some_robots/crisp_env/crisp_py/config/control/clipped_cartesian_impedance.yaml"
-)
-
-left_arm.cartesian_controller_parameters_client.set_parameters([
-    ("task.error_clip.x", 0.005), ("task.error_clip.y", 0.005), ("task.error_clip.z", 0.005),
-    ("task.error_clip.rx", 0.008), ("task.error_clip.ry", 0.008), ("task.error_clip.rz", 0.008),
-])
-
-# waypoint list
-
-raw_waypoints = parse_task_poses(f"{DATAPATH}/test_traj.task")
-MAX_WAYPOINT_STEP_M = 0.03
-waypoints = densify_waypoints(raw_waypoints, max_translation_step=MAX_WAYPOINT_STEP_M)
-
-if not waypoints:
-    raise RuntimeError(f"No valid waypoints found in {DATAPATH}/test_traj.task")
-
-# set initial target pose and orientation
-print("Starting to draw a circle...")
-target_pose = left_arm.end_effector_pose.copy()
+print("Starting capture...")
 
 
 
-# Setup zed camera
+# Setup camera
 if camera == "zed":
     zed = sl.Camera()
     init_params = sl.InitParameters()
@@ -101,97 +239,158 @@ if camera == "zed":
     zed.open(init_params)
     image = sl.Mat()
     runtime_params = sl.RuntimeParameters()
+    azure_transformation = None
 else:
+    # -------------------------------------------------------------------------
+    # Azure Kinect: configure here. Actual capture rate is capped by camera_fps.
+    # See: https://github.com/etiennedub/pyk4a#device-configuration
+    # -------------------------------------------------------------------------
     print("Using Azure camera")
     device = k4a.Device.open()
     if device is None:
         exit(-1)
     device_config = k4a.DeviceConfiguration(
+        # Color: format and resolution (e.g. RES_720P, RES_1080P, RES_1440P, RES_1536P, RES_2160P)
         color_format=k4a.EImageFormat.COLOR_BGRA32,
         color_resolution=k4a.EColorResolution.RES_720P,
+        # Depth: e.g. OFF, NFOV_2X2BINNED, NFOV_UNBINNED, WFOV_2X2BINNED, WFOV_UNBINNED, PASSIVE_IR
         depth_mode=k4a.EDepthMode.WFOV_2X2BINNED,
-        camera_fps=k4a.EFramesPerSecond.FPS_15,
+        # FPS: 5, 15, or 30. This caps max frames you can get; stream_hz should be <= this.
+        camera_fps=k4a.EFramesPerSecond.FPS_30,
         synchronized_images_only=True,
         depth_delay_off_color_usec=0,
         wired_sync_mode=k4a.EWiredSyncMode.STANDALONE,
         subordinate_delay_off_master_usec=0,
-        disable_streaming_indicator=False)
+        disable_streaming_indicator=False,
+    )
     status = device.start_cameras(device_config)
     if status != k4a.EStatus.SUCCEEDED:
         exit(-1)
+    # Transformation for depth_image_to_color_camera (depth aligned to color resolution)
+    cal = device.get_calibration(device_config.depth_mode, device_config.color_resolution)
+    azure_transformation = k4a.Transformation.create(cal)
 
+# --- Streaming capture (buffer in RAM, save to disk after motion is done for true 30 fps) ---
+pose_list = []
+frame_list = []  # each item: {"color": bgr_array, "depth": array or None}
+pose_list_lock = threading.Lock()
+capture_active = threading.Event()
+stream_hz = args.stream_hz
+TIME_TO_GOAL = 2.0  # seconds per joint waypoint when using joint trajectory
 
-# data capture variables
-frame_count = 0
-pose_count = 0
-pose_list  = []
+if trajectory_mode == "joint":
+    capture_active.set()
+    stream_thread = threading.Thread(
+        target=_streaming_capture_loop,
+        kwargs=dict(
+            capture_active=capture_active,
+            left_arm=left_arm,
+            camera=camera,
+            zed_cam=zed if camera == "zed" else None,
+            zed_image=image if camera == "zed" else None,
+            zed_runtime_params=runtime_params if camera == "zed" else None,
+            azure_device=device if camera == "azure" else None,
+            azure_transformation=azure_transformation if camera == "azure" else None,
+            pose_list=pose_list,
+            frame_list=frame_list,
+            lock=pose_list_lock,
+            rate_hz=stream_hz,
+        ),
+        daemon=True,
+    )
+    stream_thread.start()
+    joint_names = left_arm.config.joint_names
+    for i, q in enumerate(joint_waypoints):
+        left_arm.joint_trajectory_controller_client.send_joint_config(
+            joint_names, q.tolist(), time_to_goal=TIME_TO_GOAL, blocking=False
+        )
+        time.sleep(TIME_TO_GOAL)
+        print(f"Joint waypoint {i + 1}/{len(joint_waypoints)} sent")
+    time.sleep(0.5)  # allow last motion to settle
+    capture_active.clear()
+    stream_thread.join(timeout=2.0)
+    print(f"Streaming capture finished: {len(pose_list)} camera–EE pairs (buffered in RAM)")
+else:
+    target_pose.position = waypoints[0][0:3, 3]
+    target_pose.orientation = Rotation.from_matrix(waypoints[0][0:3, 0:3])
+    waypoint_index = 0
+    print("target_pose_rotation:", target_pose)
+    left_arm.move_to(pose=target_pose, speed=0.15)
 
-target_pose.position = waypoints[0][0:3,3]
-target_pose.orientation = Rotation.from_matrix(waypoints[0][0:3, 0:3])
-waypoint_index = 0
+    capture_active.set()
+    stream_thread = threading.Thread(
+        target=_streaming_capture_loop,
+        kwargs=dict(
+            capture_active=capture_active,
+            left_arm=left_arm,
+            camera=camera,
+            zed_cam=zed if camera == "zed" else None,
+            zed_image=image if camera == "zed" else None,
+            zed_runtime_params=runtime_params if camera == "zed" else None,
+            azure_device=device if camera == "azure" else None,
+            azure_transformation=azure_transformation if camera == "azure" else None,
+            pose_list=pose_list,
+            frame_list=frame_list,
+            lock=pose_list_lock,
+            rate_hz=stream_hz,
+        ),
+        daemon=True,
+    )
+    stream_thread.start()
 
-print("taget_pose_rotation:", target_pose)
-left_arm.move_to(pose=target_pose, speed=0.15)
+    start_time = 0.0
+    threshold = 0.1
+    prev_pose = left_arm.end_effector_pose.copy()
+    while waypoint_index < len(waypoints):
+        end_time = time.time()
+        print(f"Loop ~{1/(end_time - start_time):.0f} Hz | position error: {sum(left_arm.end_effector_pose.position - target_pose.position):.4f}")
+        start_time = time.time()
 
-# main trajectory loop
-start_time = 0.0
-while waypoint_index < len(waypoints):
-    end_time = time.time()
-    print(f"Time taken: {1/(end_time - start_time)} Hz")
-    start_time = time.time()
+        if abs(sum(left_arm.end_effector_pose.position - target_pose.position)) < threshold:
+            waypoint_index += 1
+            if waypoint_index < len(waypoints):
+                target_pose.position = waypoints[waypoint_index][0:3, 3]
+                target_pose.orientation = Rotation.from_matrix(waypoints[waypoint_index][0:3, 0:3])
+                print(f"Waypoint {waypoint_index} reached")
+            threshold = 0.1
+        elif abs(sum(left_arm.end_effector_pose.position - prev_pose.position)) < 0.001:
+            threshold += 0.001
+        prev_pose = left_arm.end_effector_pose.copy()
 
-    if frame_count % 1 == 0:
-        # Save the pose
-        p = left_arm.end_effector_pose.copy()
-        pose_list.append(np.array([p.position[0], p.position[1], p.position[2],
-            p.orientation.as_quat()[0], p.orientation.as_quat()[1],
-            p.orientation.as_quat()[2], p.orientation.as_quat()[3]]))
-        # print(p)
-        # Take the image and save it
-        if camera == "zed":
-            if zed.grab(runtime_params) == sl.ERROR_CODE.SUCCESS:
-                zed.retrieve_image(image, sl.VIEW.LEFT)
-                frame = image.get_data()
-                cv2.imwrite(f"{DATAPATH}/images/image_pose_{pose_count}.png", frame)
-                print(f"Image Captured {pose_count}")
-                pose_count += 1
-            else:
-                print(f"ERROR: Failed to capture image {pose_count}")
-                pose_count += 1
-        else:
-            capture = device.get_capture(-1)
-            color_image = capture.color
-            color_image_data = color_image.data  # NumPy array (BGRA)
-            color_bgr = cv2.cvtColor(color_image_data, cv2.COLOR_BGRA2BGR)
-            cv2.imwrite(f"{DATAPATH}/images/single_arm_image_pose_{pose_count}.png", color_bgr)
-            # Save full RGB-D as npz (color BGR, depth raw uint16 in mm)
-            depth_image = capture.depth
-            save_kw = {"color": color_bgr}
-            if depth_image is not None:
-                save_kw["depth"] = depth_image.data
-            np.savez(f"{DATAPATH}/images/single_arm_rgbd_pose_{pose_count}.npz", **save_kw)
-            print(f"Image Captured {pose_count}")
-            pose_count += 1
-            if status != k4a.EStatus.SUCCEEDED:
-                exit(-1)
-        
+        left_arm.set_target(pose=target_pose)
+        time.sleep(0.02)  # ~50 Hz control loop
 
-    frame_count += 1
-    print(f"Current position: {left_arm.end_effector_pose.position}")
-    print(f"Target position: {target_pose.position}")
-    print(f"Difference: {sum(left_arm.end_effector_pose.position - target_pose.position)}")
-    if abs(sum(left_arm.end_effector_pose.position - target_pose.position)) < 0.05:
-        waypoint_index += 1
-        if(waypoint_index < len(waypoints)):
-            target_pose.position = waypoints[waypoint_index][0:3,3]
-            print(f"Waypoint {waypoint_index} reached")
-            target_pose.orientation = Rotation.from_matrix(waypoints[waypoint_index][0:3, 0:3])
+    capture_active.clear()
+    stream_thread.join(timeout=2.0)
+    print(f"Streaming capture finished: {len(pose_list)} camera–EE pairs (buffered in RAM)")
 
-    # send target to controller
-    left_arm.set_target(pose=target_pose)
-
-# save all poses
+# Save all buffered frames and poses to disk (no disk I/O during capture → true 30 fps)
+# --- Saved data format ---
+# 1. Poses: DATAPATH/poses/single_arm_poses.npz
+#    - Keys: arr_0, arr_1, ... (one per frame). Each array shape (7,), dtype float64.
+#    - Layout: [x, y, z, qx, qy, qz, qw] in base frame (meters, quaternion xyzw).
+# 2. Color images: DATAPATH/images/single_arm_image_pose_{i}.png
+#    - Format: PNG. Shape (H, W, 3), BGR, uint8. Azure default 720p → (720, 1280, 3).
+# 3. RGB-D (Azure only): DATAPATH/images/single_arm_rgbd_pose_{i}.npz
+#    - Keys: "color" (H, W, 3) BGR uint8, "depth" (H, W) uint16 depth in mm.
+#    - Depth is transformed to color camera (depth_image_to_color_camera): same shape as color, pixel-aligned.
+n_saved = len(pose_list)
+if n_saved != len(frame_list):
+    print(f"Warning: pose_list length ({n_saved}) != frame_list length ({len(frame_list)}); saving min.")
+    n_saved = min(n_saved, len(frame_list))
+Path(DATAPATH, "images").mkdir(parents=True, exist_ok=True)
+Path(DATAPATH, "poses").mkdir(parents=True, exist_ok=True)
+print(f"Saving {n_saved} frames and poses to disk...")
+for i in range(n_saved):
+    cv2.imwrite(f"{DATAPATH}/images/single_arm_image_pose_{i}.png", frame_list[i]["color"])
+    if camera == "azure" and frame_list[i].get("depth") is not None:
+        np.savez(
+            f"{DATAPATH}/images/single_arm_rgbd_pose_{i}.npz",
+            color=frame_list[i]["color"],
+            depth=frame_list[i]["depth"],
+        )
 np.savez(f"{DATAPATH}/poses/single_arm_poses.npz", *pose_list)
+print("Done saving to disk.")
 
 print("Waiting for robot to settle...")
 time.sleep(1.0)
