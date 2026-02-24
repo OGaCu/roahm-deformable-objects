@@ -47,10 +47,16 @@ def _se3_exp(xi, eps=1e-9):
     T[0:3, 3] = p
     return T
 
-def _load_apriltag_transforms(max_images, DATAPATH, camera="azure"):
+def _load_apriltag_transforms(max_images, DATAPATH, camera="azure", exclude_image_indices=None):
+    if exclude_image_indices is None:
+        exclude_image_indices = set()
     detection_transforms = []
     count = 0
     for i in range(max_images):
+        if i in exclude_image_indices:
+            detection_transforms.append(None)
+            count += 1
+            continue
         detections = apriltag_image([f"{DATAPATH}/images/calibration_image_{i}.png"], output_images=True, display_images=True, tag_size=0.095, tag_family="tag36h11", camera=camera)
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
@@ -83,11 +89,17 @@ def _split_transforms(transforms):
     return t_list, r_list
 
 
-def _load_figure_eight_poses(npz_path, max_images):
+def _load_figure_eight_poses(npz_path, max_images, exclude_image_indices=None):
+    if exclude_image_indices is None:
+        exclude_image_indices = set()
     np_info = np.load(npz_path)
     positions = []
     orientations = []
     for i in range(max_images):
+        if i in exclude_image_indices:
+            positions.append(None)
+            orientations.append(None)
+            continue
         np_stuff = np_info["arr_" + str(i)]
         positions.append(np_stuff[0:3])
         orientations.append(Rotation.from_quat(np_stuff[3:]).as_matrix())
@@ -97,6 +109,10 @@ def _load_figure_eight_poses(npz_path, max_images):
 def _invert_rt_pairs(r_list, t_list):
     r_out, t_out = [], []
     for r, t in zip(r_list, t_list):
+        if r is None or t is None:
+            r_out.append(None)
+            t_out.append(None)
+            continue
         r_inv = r.T
         t_inv = -r_inv @ t
         r_out.append(r_inv)
@@ -144,20 +160,25 @@ def main():
 
     max_images = 58
     DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
+    exclude_images = {31, 57}  # skip these image indices (no detection used for calibration)
 
-    detection_transforms = _load_apriltag_transforms(max_images, DATAPATH, camera=camera)
+    detection_transforms = _load_apriltag_transforms(max_images, DATAPATH, camera=camera, exclude_image_indices=exclude_images)
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
-    positions, orientations = _load_figure_eight_poses(f"{DATAPATH}/poses/calibration_poses.npz", max_images)
+    positions, orientations = _load_figure_eight_poses(
+        f"{DATAPATH}/poses/calibration_poses.npz", max_images, exclude_image_indices=exclude_images
+    )
 
     t_base2gripper = positions[0:max_images]
     r_base2gripper = orientations[0:max_images]
 
-
-
     r_base2tag, t_base2tag = [], []
     for r, t in zip(r_base2gripper, t_base2gripper):
+        if r is None or t is None:
+            r_base2tag.append(None)
+            t_base2tag.append(None)
+            continue
         t_base2gripper_mat = np.eye(4)
         t_base2gripper_mat[0:3, 0:3] = r
         t_base2gripper_mat[0:3, 3] = t
@@ -166,22 +187,18 @@ def main():
         r_base2tag.append(t_base2tag_mat[0:3, 0:3])
         t_base2tag.append(t_base2tag_mat[0:3, 3])
 
-    r_tag2base, t_tag2base = [], []
-    for r, t in zip(r_base2tag, t_base2tag):
-        t_base2tag_mat = np.eye(4)
-        t_base2tag_mat[0:3, 0:3] = r
-        t_base2tag_mat[0:3, 3] = t
-        t_tag2base_mat = np.linalg.inv(t_base2tag_mat)
-        r_b2t = t_tag2base_mat[0:3, 0:3]
-        t_b2t = t_tag2base_mat[0:3, 3]
-        r_tag2base.append(r_b2t)
-        t_tag2base.append(t_b2t)
+    r_tag2base, t_tag2base = _invert_rt_pairs(r_base2tag, t_base2tag)
 
 
     t_base2cam_list = []
     for index in range(max_images):
-        if r_tag_in_cam_frame[index] is None or t_tag_in_cam_frame[index] is None:
-            print(f"Skipping image {index+1} - no detection")
+        if (
+            r_tag_in_cam_frame[index] is None
+            or t_tag_in_cam_frame[index] is None
+            or r_tag2base[index] is None
+            or t_tag2base[index] is None
+        ):
+            print(f"Skipping image {index} - excluded or no detection")
             continue
         t_tag2base_mat = np.eye(4)
         t_tag2base_mat[0:3, 0:3] = r_tag2base[index]
