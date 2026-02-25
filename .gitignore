@@ -3,3 +3,9 @@ my310env/
 __pycache__/*
 image_pose*
 figure_eight_poses*
+*.png
+*.mp4
+*.npz
+*.task
+*.csv
+*.json

@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 from apriltag_image import apriltag_image
 import cv2
@@ -47,7 +48,7 @@ def _se3_exp(xi, eps=1e-9):
     T[0:3, 3] = p
     return T
 
-def _load_apriltag_transforms(max_images, DATAPATH, camera="azure", exclude_image_indices=None):
+def _load_apriltag_transforms(max_images, image_dir, camera="azure", side="right", exclude_image_indices=None):
     if exclude_image_indices is None:
         exclude_image_indices = set()
     detection_transforms = []
@@ -57,7 +58,16 @@ def _load_apriltag_transforms(max_images, DATAPATH, camera="azure", exclude_imag
             detection_transforms.append(None)
             count += 1
             continue
-        detections = apriltag_image([f"{DATAPATH}/images/calibration_image_{i}.png"], output_images=True, display_images=True, tag_size=0.095, tag_family="tag36h11", camera=camera)
+        img_name = f"calibration_{side}_image_{i}.png"
+        img_path = Path(image_dir) / img_name
+        detections = apriltag_image(
+            [str(img_path)],
+            output_images=True,
+            display_images=True,
+            tag_size=0.095,
+            tag_family="tag36h11",
+            camera=camera,
+        )
         if detections is None or len(detections) == 0:
             print("no detection for image ", i)
             detection_transforms.append(None)
@@ -132,10 +142,14 @@ def _mean_se3(transforms, max_iters=100, tol=1e-9):
         t_mean = t_mean @ _se3_exp(xi_avg)
     return t_mean
 
-gripper2tag = np.array(    [[0, 0, -1, 0.02],
+gripper2tag = np.array(    [[0, 0, -1, 0.01],
                             [0, -1, 0, 0],
                             [-1, 0, 0, 0.088],
                             [0, 0, 0, 1]])
+# we did naively assume that the apriltag was always facing the camea 
+# and the end-effector orientation was always the same as the gripper orientation.
+# so we need the rotation matrix, this idea can be naturally extended to multi-camera setup.
+                            
 # gripper2tag = np.array(    [[0, 0, -1, 0],
 #                             [0, -1, 0, 0],
 #                             [-1, 0, 0, 0],
@@ -155,19 +169,50 @@ def main():
         default="azure",
         help="Camera used for capture: 'azure' or 'zed' (default: azure)",
     )
+    parser.add_argument(
+        "--side",
+        type=str,
+        choices=["left", "right"],
+        default="right",
+        help="Which calibration dataset to use: 'left' or 'right' (default: right)",
+    )
+    parser.add_argument(
+        "--calib-seq-name",
+        type=str,
+        default=None,
+        help="Calibration sequence name under captured_calibration_data/ (if using new layout).",
+    )
     args = parser.parse_args()
     camera = args.camera
+    side = args.side
+    calib_seq = args.calib_seq_name
 
     max_images = 58
     DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
-    exclude_images = {31, 57}  # skip these image indices (no detection used for calibration)
+    exclude_images = {}  # skip these image indices (no detection used for calibration)
 
-    detection_transforms = _load_apriltag_transforms(max_images, DATAPATH, camera=camera, exclude_image_indices=exclude_images)
+    # Determine where images and poses live
+    if calib_seq is None:
+        # Legacy layout: flat images/ and poses/ directories
+        images_root = str(Path(DATAPATH) / "images")
+        pose_file = str(Path(DATAPATH) / "poses" / f"calibration_{side}_poses.npz")
+        calib_base_dir = None
+    else:
+        # New layout: captured_calibration_data/{seq_name}/frames and per-arm pose files
+        calib_base_dir = Path(DATAPATH) / "captured_calibration_data" / calib_seq
+        images_root = str(calib_base_dir / "frames")
+        pose_file = (
+            calib_base_dir / f"{side}_calibration_poses.npz"
+        )
+
+    detection_transforms = _load_apriltag_transforms(
+        max_images, images_root, camera=camera, side=side, exclude_image_indices=exclude_images
+    )
 
     t_tag_in_cam_frame, r_tag_in_cam_frame = _split_transforms(detection_transforms)
 
     positions, orientations = _load_figure_eight_poses(
-        f"{DATAPATH}/poses/calibration_poses.npz", max_images, exclude_image_indices=exclude_images
+        str(pose_file), max_images, exclude_image_indices=exclude_images
     )
 
     t_base2gripper = positions[0:max_images]
@@ -210,8 +255,15 @@ def main():
 
     base2cam_mean = _mean_se3(t_base2cam_list)
     print("SE3 mean base 2 cam:\n", base2cam_mean)
-    np.savez(f"{DATAPATH}/poses/base2cam_transform.npz", base2cam_mean)
 
+    # Always save global copy under poses/ for downstream tools
+    np.savez(f"{DATAPATH}/poses/base2cam_transform_{side}.npz", base2cam_mean)
+
+    # Additionally, if using a calibration sequence, save transform there as well
+    if calib_seq is not None and calib_base_dir is not None:
+        calib_base_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(calib_base_dir / f"base2cam_transform_{side}.npz", base2cam_mean)
+        print(f"Saved base2cam_transform_{side}.npz to {calib_base_dir}")
 
 if __name__ == "__main__":
     main()

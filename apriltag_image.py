@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-from argparse import ArgumentParser
 import os
 import cv2
 import apriltag
@@ -43,11 +42,11 @@ def apriltag_image(input_images=[input_image_path],
     '''
     camera_params = _camera_params_for(camera)
 
-    parser = ArgumentParser(description='Detect AprilTags from static images.')
-    apriltag.add_arguments(parser)
-    options = parser.parse_args()
-    if tag_family:
-        options.families = tag_family
+    # parser = ArgumentParser(description='Detect AprilTags from static images.')
+    # apriltag.add_arguments(parser)
+    # options = parser.parse_args()
+    # if tag_family:
+    #     options.families = tag_family
 
     '''
     Set up a reasonable search path for the apriltag DLL.
@@ -55,7 +54,12 @@ def apriltag_image(input_images=[input_image_path],
     location, or specify your own search paths as needed.
     '''
 
-    detector = apriltag.Detector(options, searchpath=apriltag._get_dll_path())
+    # Use default detector options instead of argparse
+    options = apriltag.DetectorOptions()
+    if tag_family:
+        options.families = tag_family
+
+    detector = apriltag.Detector(options=options, searchpath=apriltag._get_dll_path())
 
     for i, image in enumerate(input_images):
 

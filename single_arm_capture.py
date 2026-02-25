@@ -21,13 +21,13 @@ import argparse
 import json
 import threading
 from pathlib import Path
+import time
 
 import numpy as np
 from crisp_py.robot import Robot
 from scipy.spatial.transform import Rotation
 import pyzed.sl as sl
 import cv2
-import time
 import k4a
 from helper import densify_waypoints, move_to_nonblocking, weighted_average_transforms, PoseSE3
 
@@ -178,6 +178,12 @@ parser.add_argument(
     help="Path to .task file for waypoints (default: DATAPATH/right_traj.task for joint, right_traj_2.task for cartesian)",
 )
 parser.add_argument(
+    "--seq-name",
+    type=str,
+    required=True,
+    help="Name of this capture sequence (used to create DATAPATH/captured_data_single_arm/{seq_name}).",
+)
+parser.add_argument(
     "--stream-hz",
     type=float,
     default=30.0,
@@ -188,6 +194,9 @@ camera = args.camera
 trajectory_mode = args.trajectory
 DATAPATH = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 TASK_PATH = args.task or (f"{DATAPATH}/right_traj.task" if trajectory_mode == "joint" else f"{DATAPATH}/right_traj_2.task")
+seq_name = args.seq_name
+base_dir = Path(DATAPATH) / "captured_data_single_arm" / seq_name
+frames_dir = base_dir / "frames"
 
 
 # initialize robot
@@ -254,7 +263,7 @@ else:
         color_format=k4a.EImageFormat.COLOR_BGRA32,
         color_resolution=k4a.EColorResolution.RES_720P,
         # Depth: e.g. OFF, NFOV_2X2BINNED, NFOV_UNBINNED, WFOV_2X2BINNED, WFOV_UNBINNED, PASSIVE_IR
-        depth_mode=k4a.EDepthMode.WFOV_2X2BINNED,
+        depth_mode=k4a.EDepthMode.NFOV_UNBINNED,
         # FPS: 5, 15, or 30. This caps max frames you can get; stream_hz should be <= this.
         camera_fps=k4a.EFramesPerSecond.FPS_30,
         synchronized_images_only=True,
@@ -276,7 +285,7 @@ frame_list = []  # each item: {"color": bgr_array, "depth": array or None}
 pose_list_lock = threading.Lock()
 capture_active = threading.Event()
 stream_hz = args.stream_hz
-TIME_TO_GOAL = 2.0  # seconds per joint waypoint when using joint trajectory
+TIME_TO_GOAL = 3.0  # seconds per joint waypoint when using joint trajectory
 
 if trajectory_mode == "joint":
     capture_active.set()
@@ -314,7 +323,7 @@ else:
     target_pose.position = waypoints[0][0:3, 3]
     target_pose.orientation = Rotation.from_matrix(waypoints[0][0:3, 0:3])
     waypoint_index = 0
-    print("target_pose_rotation:", target_pose)
+    print("target_pose_rotation:", target_peose)
     left_arm.move_to(pose=target_pose, speed=0.15)
 
     capture_active.set()
@@ -365,31 +374,69 @@ else:
     print(f"Streaming capture finished: {len(pose_list)} camera–EE pairs (buffered in RAM)")
 
 # Save all buffered frames and poses to disk (no disk I/O during capture → true 30 fps)
-# --- Saved data format ---
-# 1. Poses: DATAPATH/poses/single_arm_poses.npz
-#    - Keys: arr_0, arr_1, ... (one per frame). Each array shape (7,), dtype float64.
-#    - Layout: [x, y, z, qx, qy, qz, qw] in base frame (meters, quaternion xyzw).
-# 2. Color images: DATAPATH/images/single_arm_image_pose_{i}.png
-#    - Format: PNG. Shape (H, W, 3), BGR, uint8. Azure default 720p → (720, 1280, 3).
-# 3. RGB-D (Azure only): DATAPATH/images/single_arm_rgbd_pose_{i}.npz
-#    - Keys: "color" (H, W, 3) BGR uint8, "depth" (H, W) uint16 depth in mm.
-#    - Depth is transformed to color camera (depth_image_to_color_camera): same shape as color, pixel-aligned.
 n_saved = len(pose_list)
 if n_saved != len(frame_list):
     print(f"Warning: pose_list length ({n_saved}) != frame_list length ({len(frame_list)}); saving min.")
     n_saved = min(n_saved, len(frame_list))
-Path(DATAPATH, "images").mkdir(parents=True, exist_ok=True)
-Path(DATAPATH, "poses").mkdir(parents=True, exist_ok=True)
-print(f"Saving {n_saved} frames and poses to disk...")
+
+base_dir.mkdir(parents=True, exist_ok=True)
+frames_dir.mkdir(parents=True, exist_ok=True)
+print(f"Saving {n_saved} frames and poses to {base_dir}...")
+
+# 1) Save all PNG frames under .../captured_data_single_arm/{seq_name}/frames
 for i in range(n_saved):
-    cv2.imwrite(f"{DATAPATH}/images/single_arm_image_pose_{i}.png", frame_list[i]["color"])
-    if camera == "azure" and frame_list[i].get("depth") is not None:
-        np.savez(
-            f"{DATAPATH}/images/single_arm_rgbd_pose_{i}.npz",
-            color=frame_list[i]["color"],
-            depth=frame_list[i]["depth"],
-        )
-np.savez(f"{DATAPATH}/poses/single_arm_poses.npz", *pose_list)
+    cv2.imwrite(str(frames_dir / f"single_arm_image_{i}.png"), frame_list[i]["color"])
+
+# 2) Stack RGB-D into a single rgbd.npz: color (N,H,W,3), depth (N,H,W) if available
+colors = np.stack([frame_list[i]["color"] for i in range(n_saved)], axis=0)  # (N,H,W,3)
+if camera == "azure":
+    depth_list = [frame_list[i].get("depth") for i in range(n_saved)]
+    any_depth = any(d is not None for d in depth_list)
+    if any_depth:
+        first_valid = next((d for d in depth_list if d is not None), None)
+        if first_valid is not None:
+            H_d, W_d = first_valid.shape
+            depth_stack = np.zeros((n_saved, H_d, W_d), dtype=first_valid.dtype)
+            for i, d in enumerate(depth_list):
+                if d is not None:
+                    depth_stack[i] = d
+        else:
+            depth_stack = None
+    else:
+        depth_stack = None
+else:
+    depth_stack = None
+
+rgbd_path = base_dir / "rgbd.npz"
+if depth_stack is not None:
+    np.savez(rgbd_path, color=colors, depth=depth_stack)
+else:
+    np.savez(rgbd_path, color=colors)
+
+# 3) Save single-arm poses under .../captured_data_single_arm/{seq_name}
+np.savez(base_dir / "single_arm_poses.npz", *pose_list[:n_saved])
+
+# 4) Save color video.mp4 and depth.mp4 in .../captured_data_single_arm/{seq_name}
+H, W, _ = frame_list[0]["color"].shape
+fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+video_path = base_dir / "video.mp4"
+video_writer = cv2.VideoWriter(str(video_path), fourcc, 30.0, (W, H))
+for i in range(n_saved):
+    video_writer.write(frame_list[i]["color"])
+video_writer.release()
+
+if depth_stack is not None:
+    depth_video_path = base_dir / "depth.mp4"
+    depth_writer = cv2.VideoWriter(str(depth_video_path), fourcc, 30.0, (W, H))
+    max_depth_mm = 1500.0
+    for i in range(n_saved):
+        d = depth_stack[i].astype(np.float32)
+        d_norm = np.clip(d / max_depth_mm, 0.0, 1.0)
+        d_img = (d_norm * 255.0).astype(np.uint8)
+        d_color = cv2.applyColorMap(d_img, cv2.COLORMAP_JET)
+        depth_writer.write(d_color)
+    depth_writer.release()
+
 print("Done saving to disk.")
 
 print("Waiting for robot to settle...")
