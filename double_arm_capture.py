@@ -186,8 +186,8 @@ left_arm.wait_until_ready()
 right_arm.wait_until_ready()
 
 print("Going to home position...")
-left_arm.home()
-right_arm.home()
+# left_arm.home()
+# right_arm.home()
 
 TIME_TO_GOAL = 3.0  # seconds per joint waypoint when using joint trajectory
 
@@ -356,8 +356,8 @@ frames_dir.mkdir(parents=True, exist_ok=True)
 print(f"Saving {n_saved} frames and poses to {base_dir}...")
 
 # 1) Save all PNG frames under .../{seq_name}/frames
-for i in range(n_saved):
-    cv2.imwrite(str(frames_dir / f"double_arm_image_{i}.png"), frame_list[i]["color"])
+# for i in range(n_saved):
+#     cv2.imwrite(str(frames_dir / f"double_arm_image_{i}.png"), frame_list[i]["color"])
 
 # 2) Stack RGB-D into a single rgbd.npz: color (N,H,W,3), depth (N,H,W) if available
 colors = np.stack([frame_list[i]["color"] for i in range(n_saved)], axis=0)  # (N,H,W,3)
@@ -432,7 +432,9 @@ time.sleep(1.0)
 print("Done.")
 
 print("Return to home and shutdown")
-left_arm.home()
-right_arm.home()
+# left_arm.home()
+# right_arm.home()
 left_arm.shutdown()
 right_arm.shutdown()
+
+
