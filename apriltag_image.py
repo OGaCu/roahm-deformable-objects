@@ -82,8 +82,20 @@ def apriltag_image(input_images=[input_image_path],
 
         if display_images:
             cv2.imshow(detection_window_name, overlay)
-            while cv2.waitKey(5) < 0:   # Press any key to load subsequent image
-                pass
+            # Wait for a keypress OR window close; avoid hanging if the user closes the window.
+            while True:
+                key = cv2.waitKey(20)
+                # Any key press continues
+                if key != -1:
+                    break
+                # If window was closed, stop waiting
+                try:
+                    visible = cv2.getWindowProperty(detection_window_name, cv2.WND_PROP_VISIBLE)
+                    if visible < 1:
+                        break
+                except Exception:
+                    break
+            cv2.destroyWindow(detection_window_name)
         
         return result
 

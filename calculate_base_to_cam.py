@@ -62,9 +62,9 @@ def _load_apriltag_transforms(max_images, image_dir, camera="azure", side="right
         img_path = Path(image_dir) / img_name
         detections = apriltag_image(
             [str(img_path)],
-            output_images=True,
-            display_images=True,
-            tag_size=0.095,
+            output_images=False,
+            display_images=False,
+            tag_size=0.093,#0.095,
             tag_family="tag36h11",
             camera=camera,
         )

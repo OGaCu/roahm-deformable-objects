@@ -90,6 +90,8 @@ def _filter_combinations(
     right_items: list[dict[str, Any]],
     min_distance: float,
     max_distance: float,
+    stretch_threshold: float,
+    min_avg_z: float | None = None,
     T_right_to_left: np.ndarray | None = None,
 ) -> list[tuple[int, int]]:
     """Return (i,j) index pairs where distance between left[i] and right[j] is within thresholds.
@@ -110,8 +112,13 @@ def _filter_combinations(
                 + np.square(left_pos[i][1] - right_pos[j][1])
             )
             d3 = np.linalg.norm(left_pos[i] - right_pos[j])
-            if min_distance <= d2 and d3 <= max_distance:
-                print(f"Adding pair ({i}, {j}) with distance d2={d2:.4f} d3={d3:.4f}")
+            angle = np.arctan(abs(left_pos[i][1] - right_pos[j][1])/abs(left_pos[i][0] - right_pos[j][0]))
+            # Average height (z) of the two EEs in the (left) base frame
+            avg_z = 0.5 * (left_pos[i][2] + right_pos[j][2])
+            if min_avg_z is not None and avg_z < min_avg_z:
+                continue
+            if min_distance <= d2 and d3 <= max_distance and (angle < np.pi/8 or d3 >= stretch_threshold):
+                print(f"Adding pair ({i}, {j}) with distance d2={d2:.4f} d3={d3:.4f}, avg_z={avg_z:.4f}")
                 pairs.append((i, j))
     return pairs
 
@@ -158,14 +165,26 @@ def main() -> None:
     parser.add_argument(
         "--min-distance",
         type=float,
-        default=0.15, #0.25 for DLO
+        default=0.25, #0.25 for DLO, #0.3 for cloth and t-shirt
         help="Minimum allowed Cartesian distance between paired poses (meters).",
     )
     parser.add_argument(
         "--max-distance",
         type=float,
-        default=0.46, #0.44 for DLO
+        default=0.46, #0.44 for DLO, #0.5 for cloth and t-shirt, #0.46 for bdlo regen
         help="Maximum allowed Cartesian distance between paired poses (meters).",
+    )
+    parser.add_argument(
+        "--stretch-threshold",
+        type=float,
+        default=0.44, #0.44 for DLO #0.4 for cloth
+        help="Maximum allowed Cartesian distance between paired poses (meters).",
+    )
+    parser.add_argument(
+        "--min-avg-z",
+        type=float,
+        default=0.00,
+        help="If set, require the average z of the two EEs (in left base frame) to be >= this value (meters).",
     )
     parser.add_argument(
         "--max-pairs",
@@ -227,6 +246,8 @@ def main() -> None:
         right_items,
         min_distance=args.min_distance,
         max_distance=args.max_distance,
+        min_avg_z=args.min_avg_z,
+        stretch_threshold=args.stretch_threshold,
         T_right_to_left=T_right_to_left,
     )
     if args.max_pairs is not None and len(pairs) > args.max_pairs:

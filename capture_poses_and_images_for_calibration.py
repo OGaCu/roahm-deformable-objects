@@ -65,7 +65,7 @@ turn_rotation = np.array([  [np.cos(initial_rotation), -1 * np.sin(initial_rotat
                                 [0.0, 0.0, 1.0]])
 target_pose.orientation = Rotation.from_matrix(turn_rotation @ original_rotation)
 
-center = np.array([0.2, 0.4, 0.4])
+center = np.array([0.3, 0.3, 0.4])
 target_pose.position = center
 print("taget_pose_rotation:", target_pose)
 rate = left_arm.node.create_rate(ctrl_freq)

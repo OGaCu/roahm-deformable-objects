@@ -102,6 +102,7 @@ def _streaming_capture_loop(
     frame_list: list,
     lock: threading.Lock,
     rate_hz: float,
+    pose_list_second: list = None,
 ) -> None:
     """
     Run at target rate_hz: each tick = one (image, EE pose) pair appended to lists. No disk I/O
@@ -135,10 +136,16 @@ def _streaming_capture_loop(
                 capture = azure_device.get_capture(-1)
                 p_second = left_arm.end_effector_pose.copy()
                 p_avg = weighted_average_transforms(p_first, p_second, 0.5, 0.5)
-                pose_vec = np.array([
-                    p_avg.position[0], p_avg.position[1], p_avg.position[2],
-                    p_avg.as_quat()[0], p_avg.as_quat()[1],
-                    p_avg.as_quat()[2], p_avg.as_quat()[3],
+                ## For testing purposes we are captrunig both poses and returning them
+                pose_vec_first= np.array([
+                    p_first.position[0], p_first.position[1], p_first.position[2],
+                    p_first.orientation.as_quat()[0], p_first.orientation.as_quat()[1],
+                    p_first.orientation.as_quat()[2], p_first.orientation.as_quat()[3],
+                ])
+                pose_vec_second = np.array([
+                    p_second.position[0], p_second.position[1], p_second.position[2],
+                    p_second.orientation.as_quat()[0], p_second.orientation.as_quat()[1],
+                    p_second.orientation.as_quat()[2], p_second.orientation.as_quat()[3],
                 ])
                 color_bgr = cv2.cvtColor(capture.color.data, cv2.COLOR_BGRA2BGR).copy()
                 # Depth transformed to color camera (same resolution as color, pixel-aligned)
@@ -149,7 +156,9 @@ def _streaming_capture_loop(
                     depth_data = None
                 with lock:
                     frame_list.append({"color": color_bgr, "depth": depth_data})
-                    pose_list.append(pose_vec)
+                    pose_list.append(pose_vec_first)
+                    if pose_list_second is not None:
+                        pose_list_second.append(pose_vec_second)
         except Exception as e:
             print(f"Streaming capture error: {e}")
         elapsed = time.time() - t0
@@ -281,6 +290,7 @@ else:
 
 # --- Streaming capture (buffer in RAM, save to disk after motion is done for true 30 fps) ---
 pose_list = []
+pose_list_second = []
 frame_list = []  # each item: {"color": bgr_array, "depth": array or None}
 pose_list_lock = threading.Lock()
 capture_active = threading.Event()
@@ -301,6 +311,7 @@ if trajectory_mode == "joint":
             azure_device=device if camera == "azure" else None,
             azure_transformation=azure_transformation if camera == "azure" else None,
             pose_list=pose_list,
+            pose_list_second=pose_list_second,
             frame_list=frame_list,
             lock=pose_list_lock,
             rate_hz=stream_hz,
@@ -309,7 +320,7 @@ if trajectory_mode == "joint":
     )
     stream_thread.start()
     joint_names = left_arm.config.joint_names
-    for i, q in enumerate(joint_waypoints):
+    for i, q in enumerate(joint_waypoints[:5]):
         left_arm.joint_trajectory_controller_client.send_joint_config(
             joint_names, q.tolist(), time_to_goal=TIME_TO_GOAL, blocking=False
         )
@@ -339,6 +350,7 @@ else:
             azure_device=device if camera == "azure" else None,
             azure_transformation=azure_transformation if camera == "azure" else None,
             pose_list=pose_list,
+            pose_list_second=pose_list_second,
             frame_list=frame_list,
             lock=pose_list_lock,
             rate_hz=stream_hz,
@@ -414,7 +426,9 @@ else:
     np.savez(rgbd_path, color=colors)
 
 # 3) Save single-arm poses under .../captured_data_single_arm/{seq_name}
+# np.savez(base_dir / "single_arm_poses.npz", *pose_list[:n_saved])
 np.savez(base_dir / "single_arm_poses.npz", *pose_list[:n_saved])
+np.savez(base_dir / "single_arm_poses_second.npz", *pose_list_second[:n_saved])
 
 # 4) Save color video.mp4 and depth.mp4 in .../captured_data_single_arm/{seq_name}
 H, W, _ = frame_list[0]["color"].shape
