@@ -5,6 +5,7 @@ from apriltag_image import apriltag_image
 import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
+import sys
 
 def _skew(w):
     return np.array([
@@ -64,7 +65,7 @@ def _load_apriltag_transforms(max_images, image_dir, camera="azure", side="right
             [str(img_path)],
             output_images=False,
             display_images=False,
-            tag_size=0.093,#0.0955, this commented value seems most accurate from measuring but for now leaving alone
+            tag_size=0.093,
             tag_family="tag36h11",
             camera=camera,
         )
@@ -78,7 +79,7 @@ def _load_apriltag_transforms(max_images, image_dir, camera="azure", side="right
             found = False
             if(detections[i].tag_id == expected_tag_id):
                 if found:
-                    assert(False) #Means detected 2 tag_id 3 tags in image
+                    assert(False) # detected 2 tag_id 3 tags in image
                 detection_transforms.append(detections[i+1])
                 found = True
 
@@ -142,23 +143,14 @@ def _mean_se3(transforms, max_iters=100, tol=1e-9):
         t_mean = t_mean @ _se3_exp(xi_avg)
     return t_mean
 
-gripper2tag = np.array(    [[0, 0, -1, -0.02],#-0.02],
+gripper2tag = np.array(    [[0, 0, -1, -0.02],
                             [0, -1, 0, 0],
-                            [-1, 0, 0, 0.0905], #0.0825], these commmented values seem to be mroe accurate from measuring but for now leaving alone
+                            [-1, 0, 0, 0.0905],
                             [0, 0, 0, 1]])
-# we did naively assume that the apriltag was always facing the camea 
+# we assume that the apriltag was always facing the camea 
 # and the end-effector orientation was always the same as the gripper orientation.
 # so we need the rotation matrix, this idea can be naturally extended to multi-camera setup.
-                            
-# gripper2tag = np.array(    [[0, 0, -1, 0],
-#                             [0, -1, 0, 0],
-#                             [-1, 0, 0, 0],
-#                             [0, 0, 0, 1]])
-# gripper2tag_2 = np.array(    [[1, 0, 0, -0.08],
-#                             [0, 1, 0, 0],
-#                             [0, 0, 1, -0.02],
-#                             [0, 0, 0, 1]])
-# print("gripperthing: ", gripper2tag @ gripper2tag_2)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate base-to-camera transform from poses and AprilTag detections.")
@@ -180,7 +172,7 @@ def main():
         "--calib-seq-name",
         type=str,
         default=None,
-        help="Calibration sequence name under captured_calibration_data/ (if using new layout).",
+        help="Calibration sequence name under captured_calibration_data/",
     )
     args = parser.parse_args()
     camera = args.camera
@@ -193,12 +185,9 @@ def main():
 
     # Determine where images and poses live
     if calib_seq is None:
-        # Legacy layout: flat images/ and poses/ directories
-        images_root = str(Path(DATAPATH) / "images")
-        pose_file = str(Path(DATAPATH) / "poses" / f"calibration_{side}_poses.npz")
-        calib_base_dir = None
+        sys.exit("Error: --calib-seq-name must be provided to specify which calibration dataset to use.")
     else:
-        # New layout: captured_calibration_data/{seq_name}/frames and per-arm pose files
+        # datapath: captured_calibration_data/{seq_name}/frames and per-arm pose files
         calib_base_dir = Path(DATAPATH) / "captured_calibration_data" / calib_seq
         images_root = str(calib_base_dir / "frames")
         pose_file = (
@@ -256,10 +245,7 @@ def main():
     base2cam_mean = _mean_se3(t_base2cam_list)
     print("SE3 mean base 2 cam:\n", base2cam_mean)
 
-    # Always save global copy under poses/ for downstream tools
-    np.savez(f"{DATAPATH}/poses/base2cam_transform_{side}.npz", base2cam_mean)
-
-    # Additionally, if using a calibration sequence, save transform there as well
+    # save transform to the calibration sequence 
     if calib_seq is not None and calib_base_dir is not None:
         calib_base_dir.mkdir(parents=True, exist_ok=True)
         np.savez(calib_base_dir / f"base2cam_transform_{side}.npz", base2cam_mean)

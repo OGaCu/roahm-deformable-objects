@@ -45,7 +45,7 @@ sin_freq_z = 0.125  # rot / s
 max_time = 8.0
 
 # Setup Params
-initial_rotation = np.pi/2 # rotation arounnd robot z axis (counterclockwise)
+initial_rotation = np.pi / 2 # rotation arounnd robot z axis (counterclockwise)
 
 left_arm.controller_switcher_client.switch_controller("cartesian_impedance_controller")
 left_arm.cartesian_controller_parameters_client.load_param_config(
@@ -73,6 +73,7 @@ left_arm.move_to(pose=target_pose, speed=0.15)
 
 # Setup camera (ZED has no depth in this script; Azure uses color-aligned depth via k4a.Transformation)
 if camera == "zed":
+    print("Using ZED camera")
     azure_transformation = None
     zed = sl.Camera()
     init_params = sl.InitParameters()
@@ -159,12 +160,11 @@ while t < max_time:
 
     frame_count += 1
 
-    z_jitter = np.random.uniform(-0.05, 0.05)
-    # z_jitter = 0
+    depth_jitter = np.random.uniform(-0.05, 0.05)
     
     # compute figure-eight trajectory position
     x = radius * np.sin(2 * np.pi * sin_freq_y * t) + center[0]
-    y = center[1] + z_jitter
+    y = center[1] + depth_jitter
     z = radius * np.sin(2 * np.pi * sin_freq_z * t) + center[2] 
     target_pose.position = np.array([x, y, z])
 
