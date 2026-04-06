@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """
-Project the two pose sets saved by `single_arm_capture.py` onto the captured images.
+Project the single pose set saved by `single_arm_capture.py` onto captured images.
 
 `single_arm_capture.py` writes, under:
   captured_data_single_arm/<seq_name>/
-    frames/single_arm_image_{i}.png
+    rgbd.npz
     single_arm_poses.npz
-    single_arm_poses_second.npz
 
 This script:
-  1) Loads both pose files.
+  1) Loads the pose file.
   2) Projects each pose's 3D point (x,y,z in base frame) into the camera image using
      the calibrated T_base2cam and camera intrinsics (same math as verify3d2d.py).
   3) Writes **two** MP4s:
-     - Default `--output-video`: per frame, the two projected points and a segment between them.
-     - `--output-video-trajectory`: same overlay plus **polylines** connecting all projected points
-       from frame 0 … current for pose 1 and for pose 2 (two trails).
-  4) Optionally saves annotated frames (connector-only overlay) under `projected_frames/`.
+     - Default `--output-video`: per frame, the projected point.
+     - `--output-video-trajectory`: same overlay plus a polyline trail of all projected points 0..t.
+  4) Optionally saves annotated frames under `projected_frames/`.
 """
 
 from __future__ import annotations
@@ -27,7 +25,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -167,7 +164,7 @@ def combine_images_vertical(img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Project two poses (first/second) onto images and draw connector line.")
+    parser = argparse.ArgumentParser(description="Project a single pose stream onto images.")
     default_datapath = "/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects"
 
     parser.add_argument("--datapath", type=str, default=default_datapath, help="Root hand_to_eye_calibration data directory.")
@@ -184,7 +181,7 @@ def main() -> None:
         help="Path to base2cam_transform npz (recommended). If omitted, auto-searches in --datapath/poses.",
     )
 
-    parser.add_argument("--image-pattern-1", type=str, default="single_arm_image_{i}.png", help="First image filename pattern under frames/.")
+    parser.add_argument("--image-pattern-1", type=str, default="single_arm_image_{i}.png", help="Image filename pattern under frames/.")
     parser.add_argument("--image-pattern-2", type=str, default=None,
                         help="Optional second image filename pattern under frames/. If set, both images are annotated and combined for video.")
     parser.add_argument("--combine", type=str, choices=["side_by_side", "vertical"], default="side_by_side",
@@ -198,12 +195,12 @@ def main() -> None:
         help="Image index offset for overlay. First pose is drawn on image index=frame-delay.",
     )
     parser.add_argument("--fps", type=float, default=30.0, help="Output video FPS.")
-    parser.add_argument("--output-video", type=str, default="two_pose_projection_line.mp4", help="Output mp4 path (relative to captured-dir if not absolute).")
+    parser.add_argument("--output-video", type=str, default="pose_projection.mp4", help="Output mp4 path (relative to captured-dir if not absolute).")
     parser.add_argument(
         "--output-video-trajectory",
         type=str,
-        default="two_pose_projection_trajectory.mp4",
-        help="Second mp4: adds polylines connecting all projected points 0..t for each pose stream (relative to captured-dir if not absolute).",
+        default="pose_projection_trajectory.mp4",
+        help="Second mp4: adds a polyline connecting all projected points 0..t (relative to captured-dir if not absolute).",
     )
     parser.add_argument("--trajectory-line-thickness", type=int, default=2, help="Polyline thickness for trajectory video.")
     parser.add_argument("--output-frames-dir", type=str, default=None, help="If set, save annotated frames to this directory (default: projected_frames/ under captured-dir).")
@@ -219,27 +216,29 @@ def main() -> None:
         captured_dir = datapath / "captured_data_single_arm" / args.seq_name
 
     frames_dir = captured_dir / "frames"
-    poses_first_path = captured_dir / "single_arm_poses.npz"
-    poses_second_path = captured_dir / "single_arm_poses_second.npz"
+    rgbd_path = captured_dir / "rgbd.npz"
+    poses_path = captured_dir / "single_arm_poses.npz"
 
-    if not frames_dir.exists():
-        raise FileNotFoundError(f"Missing frames dir: {frames_dir}")
-    if not poses_first_path.exists():
-        raise FileNotFoundError(f"Missing poses npz: {poses_first_path}")
-    if not poses_second_path.exists():
-        raise FileNotFoundError(f"Missing poses npz: {poses_second_path}")
+    if not poses_path.exists():
+        raise FileNotFoundError(f"Missing poses npz: {poses_path}")
 
-    # print(poses_first_path)
-
-    pose_vecs_1 = _load_npz_arr_poses(poses_first_path)
-    # print(pose_vecs_1.shape)
-    pose_vecs_2 = _load_npz_arr_poses(poses_second_path)
-    # print(pose_vecs_2)
-    n = min(pose_vecs_1.shape[0], pose_vecs_2.shape[0])
+    pose_vecs = _load_npz_arr_poses(poses_path)
+    n = pose_vecs.shape[0]
     if n == 0:
         raise RuntimeError("No poses found to project.")
-    if pose_vecs_1.shape[0] != pose_vecs_2.shape[0]:
-        print(f"Warning: first/second pose lengths differ: {pose_vecs_1.shape[0]} vs {pose_vecs_2.shape[0]}; using n={n}.")
+
+    use_rgbd = rgbd_path.exists()
+    colors = None
+    if use_rgbd:
+        rgbd = np.load(rgbd_path)
+        if "color" not in rgbd:
+            raise KeyError(f"Missing 'color' in {rgbd_path}")
+        colors = np.asarray(rgbd["color"])
+        if colors.ndim != 4:
+            raise ValueError(f"Unexpected color array shape in {rgbd_path}: {colors.shape}")
+    else:
+        if not frames_dir.exists():
+            raise FileNotFoundError(f"Missing frames dir: {frames_dir}")
 
     # Intrinsics.
     fx, fy, cx, cy = _camera_params_for(args.camera)
@@ -282,24 +281,18 @@ def main() -> None:
         out_video_traj_path = captured_dir / out_video_traj_path
 
     # Precompute 2D projections for every index we step through (for trajectory polylines).
-    uv1_list: list[tuple[float, float] | None] = []
-    uv2_list: list[tuple[float, float] | None] = []
+    uv_list: list[tuple[float, float] | None] = []
     for i in pose_indices:
-        uv1_list.append(project_3d_to_2d(pose_vecs_1[i, 0:3], K, T_base2cam))
-        uv2_list.append(project_3d_to_2d(pose_vecs_2[i, 0:3], K, T_base2cam))
+        uv_list.append(project_3d_to_2d(pose_vecs[i, 0:3], K, T_base2cam))
 
     writer = None
     writer_traj = None
     wrote_frames = 0
 
     # Output styling.
-    color_first = (0, 255, 0)     # green
-    color_second = (255, 0, 0)   # red in BGR
-    color_line = (255, 255, 255) # white
-    traj_color_1 = (0, 180, 0)   # darker green trail
-    traj_color_2 = (0, 0, 200)   # darker red/blue trail
+    color_point = (0, 255, 0)    # green
+    traj_color = (0, 180, 0)     # darker green trail
     radius = 4
-    line_thickness = 15
     traj_thick = max(1, int(args.trajectory_line_thickness))
 
     for step_idx, i in enumerate(pose_indices):
@@ -307,34 +300,36 @@ def main() -> None:
         if img_idx < 0:
             # Skip overlays that would map to negative image indices.
             continue
-        img1_path = frames_dir / args.image_pattern_1.format(i=img_idx)
-        img1 = cv2.imread(str(img1_path), cv2.IMREAD_COLOR)
-        if img1 is None:
-            print(f"Skipping missing image: {img1_path}")
-            continue
+        if use_rgbd:
+            if img_idx >= colors.shape[0]:
+                print(f"Skipping missing rgbd frame index: {img_idx}")
+                continue
+            img1 = colors[img_idx]
+        else:
+            img1_path = frames_dir / args.image_pattern_1.format(i=img_idx)
+            img1 = cv2.imread(str(img1_path), cv2.IMREAD_COLOR)
+            if img1 is None:
+                print(f"Skipping missing image: {img1_path}")
+                continue
 
         # 2nd image is optional; if missing we fall back to image1.
         img2 = None
-        if args.image_pattern_2:
+        if args.image_pattern_2 and not use_rgbd:
             img2_path = frames_dir / args.image_pattern_2.format(i=img_idx)
             img2 = cv2.imread(str(img2_path), cv2.IMREAD_COLOR)
             if img2 is None:
                 print(f"Warning: missing image-pattern-2 at {img2_path}; using image-pattern-1 for both.")
                 img2 = None
 
-        uv1 = uv1_list[step_idx]
-        uv2 = uv2_list[step_idx]
+        uv = uv_list[step_idx]
 
         def annotate(img: np.ndarray, *, with_trajectory: bool) -> np.ndarray:
             out = img.copy()
             if with_trajectory:
                 # Connect all previous projected points along each pose stream up to current index.
                 if step_idx > 0:
-                    draw_polyline_tail(out, uv1_list, step_idx, traj_color_1, traj_thick)
-                    draw_polyline_tail(out, uv2_list, step_idx, traj_color_2, traj_thick)
-            draw_point(out, uv1, color_first, radius=radius)
-            draw_point(out, uv2, color_second, radius=radius)
-            draw_line(out, uv1, uv2, color_line, thickness=line_thickness)
+                    draw_polyline_tail(out, uv_list, step_idx, traj_color, traj_thick)
+            draw_point(out, uv, color_point, radius=radius)
             return out
 
         img1_ann = annotate(img1, with_trajectory=False)
@@ -392,4 +387,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
