@@ -158,11 +158,14 @@ while t < max_time:
 
 
     frame_count += 1
+
+    z_jitter = np.random.uniform(-0.05, 0.05)
+    # z_jitter = 0
     
     # compute figure-eight trajectory position
     x = radius * np.sin(2 * np.pi * sin_freq_y * t) + center[0]
-    y = center[1]
-    z = radius * np.sin(2 * np.pi * sin_freq_z * t) + center[2]
+    y = center[1] + z_jitter
+    z = radius * np.sin(2 * np.pi * sin_freq_z * t) + center[2] 
     target_pose.position = np.array([x, y, z])
 
     # send target to controller

@@ -191,6 +191,12 @@ def main() -> None:
                         help="How to combine image 1 and image 2 into one video frame (only used if image-pattern-2 is set).")
 
     parser.add_argument("--downsample", type=int, default=1, help="Use every Nth pose/image (default 1).")
+    parser.add_argument(
+        "--frame-delay",
+        type=int,
+        default=0,
+        help="Image index offset for overlay. First pose is drawn on image index=frame-delay.",
+    )
     parser.add_argument("--fps", type=float, default=30.0, help="Output video FPS.")
     parser.add_argument("--output-video", type=str, default="two_pose_projection_line.mp4", help="Output mp4 path (relative to captured-dir if not absolute).")
     parser.add_argument(
@@ -261,7 +267,8 @@ def main() -> None:
 
     T_base2cam = _load_T_base2cam(Path(T_base2cam_path))
 
-    pose_indices = list(range(0, n, max(1, int(args.downsample))))
+    downsample = max(1, int(args.downsample))
+    pose_indices = list(range(0, n, downsample))
 
     out_frames_dir = Path(args.output_frames_dir) if args.output_frames_dir else (captured_dir / "projected_frames")
     out_frames_dir.mkdir(parents=True, exist_ok=True)
@@ -296,7 +303,11 @@ def main() -> None:
     traj_thick = max(1, int(args.trajectory_line_thickness))
 
     for step_idx, i in enumerate(pose_indices):
-        img1_path = frames_dir / args.image_pattern_1.format(i=i)
+        img_idx = i + int(args.frame_delay)
+        if img_idx < 0:
+            # Skip overlays that would map to negative image indices.
+            continue
+        img1_path = frames_dir / args.image_pattern_1.format(i=img_idx)
         img1 = cv2.imread(str(img1_path), cv2.IMREAD_COLOR)
         if img1 is None:
             print(f"Skipping missing image: {img1_path}")
@@ -305,7 +316,7 @@ def main() -> None:
         # 2nd image is optional; if missing we fall back to image1.
         img2 = None
         if args.image_pattern_2:
-            img2_path = frames_dir / args.image_pattern_2.format(i=i)
+            img2_path = frames_dir / args.image_pattern_2.format(i=img_idx)
             img2 = cv2.imread(str(img2_path), cv2.IMREAD_COLOR)
             if img2 is None:
                 print(f"Warning: missing image-pattern-2 at {img2_path}; using image-pattern-1 for both.")
@@ -348,7 +359,7 @@ def main() -> None:
             )
 
         # Write output frame (connector-only overlay for PNG sequence).
-        out_frame_path = out_frames_dir / f"projected_{step_idx:06d}_i{i}.png"
+        out_frame_path = out_frames_dir / f"projected_{step_idx:06d}_pose{i}_img{img_idx}.png"
         cv2.imwrite(str(out_frame_path), canvas)
 
         if writer is None:

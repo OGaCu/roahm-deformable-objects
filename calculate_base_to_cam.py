@@ -64,7 +64,7 @@ def _load_apriltag_transforms(max_images, image_dir, camera="azure", side="right
             [str(img_path)],
             output_images=False,
             display_images=False,
-            tag_size=0.093,#0.095,
+            tag_size=0.093,#0.0955, this commented value seems most accurate from measuring but for now leaving alone
             tag_family="tag36h11",
             camera=camera,
         )
@@ -142,9 +142,9 @@ def _mean_se3(transforms, max_iters=100, tol=1e-9):
         t_mean = t_mean @ _se3_exp(xi_avg)
     return t_mean
 
-gripper2tag = np.array(    [[0, 0, -1, 0.01],
+gripper2tag = np.array(    [[0, 0, -1, -0.02],#-0.02],
                             [0, -1, 0, 0],
-                            [-1, 0, 0, 0.088],
+                            [-1, 0, 0, 0.0905], #0.0825], these commmented values seem to be mroe accurate from measuring but for now leaving alone
                             [0, 0, 0, 1]])
 # we did naively assume that the apriltag was always facing the camea 
 # and the end-effector orientation was always the same as the gripper orientation.

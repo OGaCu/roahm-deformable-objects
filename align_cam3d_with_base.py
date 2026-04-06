@@ -18,9 +18,10 @@ from scipy.spatial.transform import Rotation
 from apriltag_image import _camera_params_for
 
 
-def load_base2cam(datapath: Path) -> np.ndarray:
+def load_base2cam(transform_npz: Path) -> np.ndarray:
     """Load SE3 transform from base frame to camera frame."""
-    T = np.load(datapath / "poses" / "base2cam_transform_right.npz")["arr_0"]
+    data = np.load(transform_npz)
+    T = data["arr_0"] if "arr_0" in data else data[list(data.keys())[0]]
     if T.shape != (4, 4):
         raise ValueError(f"base2cam_transform has shape {T.shape}, expected (4,4)")
     return T
@@ -65,6 +66,25 @@ def transform_points(T: np.ndarray, pts: np.ndarray) -> np.ndarray:
     return (R @ pts.T).T + t
 
 
+def nearest_point_stats(pts: np.ndarray, query_pt: np.ndarray) -> dict:
+    """Nearest-point and distance distribution stats from point cloud to query point."""
+    if pts.shape[0] == 0:
+        raise ValueError("Point cloud is empty; cannot compute nearest-point stats.")
+    deltas = pts - query_pt.reshape(1, 3)
+    dists = np.linalg.norm(deltas, axis=1)
+    nn_idx = int(np.argmin(dists))
+    return {
+        "nn_idx": nn_idx,
+        "nn_point": pts[nn_idx],
+        "nn_dist_m": float(dists[nn_idx]),
+        "mean_m": float(np.mean(dists)),
+        "std_m": float(np.std(dists)),
+        "median_m": float(np.median(dists)),
+        "p95_m": float(np.percentile(dists, 95.0)),
+        "max_m": float(np.max(dists)),
+    }
+
+
 def project_base_point_to_image(
     p_base: np.ndarray, T_base2cam: np.ndarray, K: np.ndarray
 ) -> tuple[float, float] | None:
@@ -85,7 +105,32 @@ def main() -> None:
         "--datapath",
         type=str,
         default="/home/roahmlab/move_some_robots/crisp_env/crisp_py/hand_to_eye_calibration/roahm-deformable-objects",
-        help="Root data directory (where poses/ and images/ live).",
+        help="Root data directory (where poses/ and captured_data_single_arm/ live).",
+    )
+    parser.add_argument(
+        "--seq-name",
+        type=str,
+        default=None,
+        help="Single-arm sequence under captured_data_single_arm/, e.g. '03-22'. If omitted, legacy layout is used.",
+    )
+    parser.add_argument(
+        "--capture-dir",
+        type=str,
+        default=None,
+        help="Direct path to captured_data_single_arm/<seq>. Overrides --seq-name.",
+    )
+    parser.add_argument(
+        "--calib-dir",
+        type=str,
+        default=None,
+        help="Directory containing base2cam_transform_{left,right}.npz. If not set, uses datapath/poses.",
+    )
+    parser.add_argument(
+        "--side",
+        type=str,
+        choices=["left", "right"],
+        default="right",
+        help="Which base2cam transform to use (default: right).",
     )
     parser.add_argument(
         "--index",
@@ -99,13 +144,51 @@ def main() -> None:
         default=50000,
         help="Maximum number of depth points to plot (subsample for speed).",
     )
+    parser.add_argument(
+        "--around-ee-only",
+        action="store_true",
+        help="Only visualize points within --ee-radius-m of the current end-effector position.",
+    )
+    parser.add_argument(
+        "--ee-radius-m",
+        type=float,
+        default=0.25,
+        help="Radius in meters around EE used when --around-ee-only is set (default: 0.25).",
+    )
     args = parser.parse_args()
 
     datapath = Path(args.datapath)
     idx = args.index
 
+    # Resolve capture input layout.
+    if args.capture_dir is not None:
+        seq_dir = Path(args.capture_dir)
+        if not seq_dir.exists():
+            raise FileNotFoundError(f"--capture-dir does not exist: {seq_dir}")
+        use_new_layout = True
+    elif args.seq_name:
+        seq_dir = datapath / "captured_data_single_arm" / args.seq_name
+        if not seq_dir.exists():
+            raise FileNotFoundError(f"Sequence directory not found: {seq_dir}")
+        use_new_layout = True
+    else:
+        seq_dir = None
+        use_new_layout = False
+
+    calib_dir = Path(args.calib_dir) if args.calib_dir else (datapath / "poses")
+    base2cam_path = calib_dir / f"base2cam_transform_{args.side}.npz"
+    if not base2cam_path.exists():
+        fallback = calib_dir / "base2cam_transform.npz"
+        if fallback.exists():
+            base2cam_path = fallback
+        else:
+            raise FileNotFoundError(
+                f"Could not find base2cam transform at {base2cam_path} "
+                f"(or legacy fallback {fallback})."
+            )
+
     # Load base->cam and its inverse
-    T_base2cam = load_base2cam(datapath)
+    T_base2cam = load_base2cam(base2cam_path)
     R_bc = T_base2cam[0:3, 0:3]
     t_bc = T_base2cam[0:3, 3]
     R_cb = R_bc.T
@@ -119,7 +202,13 @@ def main() -> None:
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
 
     # Load EE pose for this frame (base frame)
-    poses_npz = np.load(datapath / "poses" / "single_arm_poses.npz")
+    if use_new_layout:
+        poses_path = seq_dir / "single_arm_poses.npz"
+        if not poses_path.exists():
+            raise FileNotFoundError(f"single_arm_poses.npz not found in {seq_dir}")
+        poses_npz = np.load(poses_path)
+    else:
+        poses_npz = np.load(datapath / "poses" / "single_arm_poses.npz")
     key = f"arr_{idx}"
     if key not in poses_npz:
         raise KeyError(f"{key} not found in single_arm_poses.npz")
@@ -129,20 +218,45 @@ def main() -> None:
     R_base_ee = Rotation.from_quat(q).as_matrix()
 
     # Load RGB-D for this frame (color-aligned depth)
-    rgbd_path = datapath / "images" / f"single_arm_rgbd_pose_{idx}.npz"
-    rgbd = np.load(rgbd_path)
-    color = rgbd["color"]  # (H, W, 3) BGR uint8
-    depth = rgbd.get("depth", None)
-    if depth is None:
-        raise ValueError(f"No 'depth' in {rgbd_path} (need color-aligned depth).")
+    if use_new_layout:
+        rgbd_path = seq_dir / "rgbd.npz"
+        if not rgbd_path.exists():
+            raise FileNotFoundError(f"rgbd.npz not found in {seq_dir}")
+        rgbd = np.load(rgbd_path)
+        colors = rgbd["color"]  # (N,H,W,3)
+        depth_stack = rgbd.get("depth", None)
+        if depth_stack is None:
+            raise ValueError(f"No 'depth' in {rgbd_path} (need color-aligned depth).")
+        if idx < 0 or idx >= colors.shape[0]:
+            raise IndexError(f"--index {idx} out of range; rgbd.npz has {colors.shape[0]} frames")
+        color = colors[idx]
+        depth = depth_stack[idx]
+    else:
+        # Legacy per-frame npz layout.
+        rgbd_path = datapath / "images" / f"single_arm_rgbd_pose_{idx}.npz"
+        rgbd = np.load(rgbd_path)
+        color = rgbd["color"]  # (H, W, 3) BGR uint8
+        depth = rgbd.get("depth", None)
+        if depth is None:
+            raise ValueError(f"No 'depth' in {rgbd_path} (need color-aligned depth).")
 
     # Build camera-frame point cloud with color
     pts_cam, colors_cam_bgr = depth_to_pointcloud_cam(depth, K, color)
+
+    # EE in camera frame (using base->cam), used by optional local neighborhood filtering.
+    p_base_h = np.hstack([p_base, 1.0])
+    p_cam = (T_base2cam @ p_base_h)[:3]
 
     # Foreground filter in camera frame:
     # keep only points with depth <= 1.5 m AND |X_cam| <= 0.5 m (others treated as background)
     # (X,Z are in meters in camera coordinates)
     foreground_mask = (pts_cam[:, 2] <= 1.5) & (np.abs(pts_cam[:, 0]) <= 0.5)
+    if args.around_ee_only:
+        if args.ee_radius_m <= 0:
+            raise ValueError("--ee-radius-m must be positive.")
+        # Keep only points in an EE-centered sphere in camera frame.
+        dist_to_ee = np.linalg.norm(pts_cam - p_cam.reshape(1, 3), axis=1)
+        foreground_mask &= dist_to_ee <= args.ee_radius_m
     pts_cam = pts_cam[foreground_mask]
     colors_cam_bgr = colors_cam_bgr[foreground_mask]
 
@@ -195,14 +309,43 @@ def main() -> None:
     pts_cam_plot = pts_cam[sel_idx]
     colors_cam_plot = colors_cam_bgr[sel_idx]
 
-    # EE in camera frame (using base->cam)
-    p_base_h = np.hstack([p_base, 1.0])
-    p_cam = (T_base2cam @ p_base_h)[:3]
-
     # Transform entire (foreground) cloud into base frame
     pts_base = transform_points(T_cam2base, pts_cam)
     pts_base_plot = pts_base[sel_idx]
     colors_base_plot = colors_cam_bgr[sel_idx]
+
+    # Nearest-neighbor stats: EE to cloud in camera/base frames.
+    cam_stats = nearest_point_stats(pts_cam, p_cam)
+    base_stats = nearest_point_stats(pts_base, p_base)
+    nn_cam = cam_stats["nn_point"]
+    nn_base = base_stats["nn_point"]
+    nn_base_from_cam = (T_cam2base @ np.hstack([nn_cam, 1.0]))[:3]
+
+    print("\n" + "=" * 72)
+    print(f"Nearest point-cloud point statistics (frame index {idx})")
+    print("=" * 72)
+    print("Camera frame (meters):")
+    print(f"  EE position                  : [{p_cam[0]:.4f}, {p_cam[1]:.4f}, {p_cam[2]:.4f}]")
+    print(f"  NN point                     : [{nn_cam[0]:.4f}, {nn_cam[1]:.4f}, {nn_cam[2]:.4f}]")
+    print(f"  NN distance                  : {cam_stats['nn_dist_m']:.4f} m")
+    print(
+        f"  Dist distribution (m)        : mean {cam_stats['mean_m']:.4f}, std {cam_stats['std_m']:.4f}, "
+        f"median {cam_stats['median_m']:.4f}, p95 {cam_stats['p95_m']:.4f}, max {cam_stats['max_m']:.4f}"
+    )
+    print("Base frame (meters):")
+    print(f"  EE position                  : [{p_base[0]:.4f}, {p_base[1]:.4f}, {p_base[2]:.4f}]")
+    print(f"  NN point                     : [{nn_base[0]:.4f}, {nn_base[1]:.4f}, {nn_base[2]:.4f}]")
+    print(f"  NN distance                  : {base_stats['nn_dist_m']:.4f} m")
+    print(
+        f"  Dist distribution (m)        : mean {base_stats['mean_m']:.4f}, std {base_stats['std_m']:.4f}, "
+        f"median {base_stats['median_m']:.4f}, p95 {base_stats['p95_m']:.4f}, max {base_stats['max_m']:.4f}"
+    )
+    print("Consistency check:")
+    print(
+        f"  cam-NN transformed to base   : [{nn_base_from_cam[0]:.4f}, {nn_base_from_cam[1]:.4f}, {nn_base_from_cam[2]:.4f}]"
+    )
+    print(f"  |base_NN - T(cam_NN)|        : {np.linalg.norm(nn_base - nn_base_from_cam):.6f} m")
+    print("=" * 72 + "\n")
 
     # Convert to millimeters for visualization
     scale_mm = 1000.0
@@ -239,6 +382,9 @@ def main() -> None:
     ax1.set_title(f"Camera-frame point cloud with EE (frame {idx})", color="white")
     ax1.tick_params(colors="white")
     ax1.legend()
+    ax1.view_init(azim=-180, roll=90)
+
+    # ax1.view_init(elev=0, azim=90)
 
     # Visualization 2: point cloud transformed into base frame, with EE in base (units: mm)
     fig2 = plt.figure()
@@ -257,6 +403,7 @@ def main() -> None:
     ax2.scatter(0.0, 0.0, 0.0, c="blue", s=40, label="origin (base)")
     ax2.scatter(p_base_mm[0], p_base_mm[1], p_base_mm[2], c="red", s=60, label="EE (base frame)")
     # EE orientation axes in base frame, centered at EE, length in mm
+    ax2.view_init(elev=0, azim=90)
     axis_len_base_mm = 50.0
     ee_axes_mm = R_base_ee @ (axis_len_base_mm * np.eye(3))
     colors = ["r", "g", "b"]

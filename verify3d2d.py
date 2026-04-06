@@ -111,6 +111,7 @@ def write_trajectory_video(
     points_2d: list,
     tail_length: int,
     downsample: int,
+    frame_delay: int,
     output_path: str,
     fps: float = 10.0,
     points_2d_second: list | None = None,
@@ -118,7 +119,9 @@ def write_trajectory_video(
 ):
     """
     Write an .mp4 with trajectory tail(s) overlaid. If points_2d_second is given, draw both
-    (first = green/orange, second = blue/cyan). Frame i uses image at index i * downsample.
+    (first = green/orange, second = blue/cyan).
+    Frame i uses image at index i * downsample + frame_delay.
+    Positive frame_delay shifts EE overlays later in the image sequence.
     """
     n_frames = len(points_2d)
     if points_2d_second is not None and len(points_2d_second) != n_frames:
@@ -126,7 +129,7 @@ def write_trajectory_video(
     if n_frames == 0:
         print("No frames to write.")
         return
-    first_img_path = f"{datapath}/images/{image_name_pattern.format(i=0)}"
+    first_img_path = f"{datapath}/images/{image_name_pattern.format(i=max(0, frame_delay))}"
     first_img = cv2.imread(first_img_path)
     if first_img is None:
         print(f"Cannot load {first_img_path}; aborting video.")
@@ -146,7 +149,7 @@ def write_trajectory_video(
     thickness = -1
 
     for i in range(n_frames):
-        orig_idx = i * downsample
+        orig_idx = i * downsample + frame_delay
         img_path = f"{datapath}/images/{image_name_pattern.format(i=orig_idx)}"
         img = cv2.imread(img_path)
         if img is None:
@@ -181,6 +184,7 @@ parser = argparse.ArgumentParser(description="Verify hand-eye calibration: proje
 parser.add_argument("--mode", type=str, choices=["single", "dual"], default="single",
     help="single: one arm (single_arm_poses.npz). dual: both arms (left_arm_poses + right_arm_poses), project both with right_to_left transform.")
 parser.add_argument("--downsample", type=int, default=1, help="Use every Nth frame (default: 1 = no downsample)")
+parser.add_argument("--frame-delay", type=int, default=0, help="Image index offset for overlay. First EE point is drawn on image index=frame-delay.")
 parser.add_argument("--tail-length", type=int, default=60, help="Trajectory tail length in frames (default: 60)")
 parser.add_argument("--output", type=str, default="traj_2d_verify.mp4", help="Output video path (default: traj_2d_verify.mp4)")
 parser.add_argument("--fps", type=float, default=30.0, help="Output video FPS (default: 30)")
@@ -268,6 +272,7 @@ write_trajectory_video(
     points_2d,
     tail_length=args.tail_length,
     downsample=downsample,
+    frame_delay=args.frame_delay,
     output_path=out_path,
     fps=args.fps,
     points_2d_second=points_2d_second,
