@@ -55,6 +55,33 @@ def parse_task_joints(task_path: str | Path) -> list[np.ndarray]:
     return joint_configs
 
 
+def _apply_frame_pose_delay(
+    frame_list: list,
+    left_pose_list: list,
+    right_pose_list: list,
+    delay: int,
+) -> tuple[list, list, list]:
+    if delay <= 0:
+        return frame_list, left_pose_list, right_pose_list
+
+    if len(frame_list) <= delay:
+        frame_list = []
+    else:
+        frame_list = frame_list[delay:]
+
+    if len(left_pose_list) <= delay:
+        left_pose_list = []
+    else:
+        left_pose_list = left_pose_list[:-delay]
+
+    if len(right_pose_list) <= delay:
+        right_pose_list = []
+    else:
+        right_pose_list = right_pose_list[:-delay]
+
+    return frame_list, left_pose_list, right_pose_list
+
+
 def _streaming_capture_loop_double(
     capture_active: threading.Event,
     left_arm,
@@ -278,6 +305,8 @@ print("Going to home position...")
 # right_arm.home()
 
 TIME_TO_GOAL = 1.5  # seconds per joint waypoint when using joint trajectory
+# Delay between captured robot poses and captured images (camera capture is non-blocking).
+IMAGE_POSE_FRAME_DELAY = 7
 
 if trajectory_mode == "joint":
     left_joint_waypoints = parse_task_joints(TASK_LEFT)
@@ -494,6 +523,9 @@ for chunk_idx in range(num_chunks if use_chunks else 1):
 
     capture_active.clear()
     stream_thread.join(timeout=2.0)
+    frame_list, left_pose_list, right_pose_list = _apply_frame_pose_delay(
+        frame_list, left_pose_list, right_pose_list, IMAGE_POSE_FRAME_DELAY
+    )
     n_saved = min(len(frame_list), len(left_pose_list), len(right_pose_list))
     print(f"Chunk/run finished: {n_saved} frames, {len(left_pose_list)} left poses, {len(right_pose_list)} right poses")
 
@@ -583,5 +615,3 @@ print("Return to home and shutdown")
 # right_arm.home()
 left_arm.shutdown()
 right_arm.shutdown()
-
-
